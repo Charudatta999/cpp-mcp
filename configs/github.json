@@ -1,0 +1,406 @@
+{
+  "server": {
+    "name": "github-gateway",
+    "version": "1.0.0"
+  },
+  "defaults": {
+    "base_url": "https://api.github.com",
+    "headers": {
+      "Accept": "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "cpp-mcp-gateway/1.0"
+    },
+    "auth": {
+      "type": "bearer",
+      "token_env": "GITHUB_TOKEN"
+    }
+  },
+  "tools": [
+    {
+      "name": "create_repo",
+      "description": "Create a new repository for the authenticated user",
+      "method": "POST",
+      "path": "/user/repos",
+      "parameters": [
+        {
+          "name": "name",
+          "type": "string",
+          "description": "The name of the repository",
+          "required": true,
+          "location": "body"
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "description": "A short description of the repository",
+          "required": false,
+          "location": "body"
+        },
+        {
+          "name": "private",
+          "type": "string",
+          "description": "Whether the repository is private (true/false)",
+          "required": false,
+          "location": "body",
+          "default": "false"
+        }
+      ]
+    },
+    {
+      "name": "create_or_update_file",
+      "description": "Create or update a file in a repository",
+      "method": "PUT",
+      "path": "/repos/{{owner}}/{{repo}}/contents/{{path}}",
+      "parameters": [
+        {
+          "name": "owner",
+          "type": "string",
+          "description": "Repository owner",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "description": "Repository name",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "description": "File path in the repository",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "description": "Commit message",
+          "required": true,
+          "location": "body"
+        },
+        {
+          "name": "content",
+          "type": "string",
+          "description": "The new file content, Base64 encoded",
+          "required": true,
+          "location": "body"
+        },
+        {
+          "name": "sha",
+          "type": "string",
+          "description": "The blob SHA of the file being replaced (required if updating)",
+          "required": false,
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "get_user",
+      "description": "Get a GitHub user's profile. Leave username empty for authenticated user.",
+      "method": "GET",
+      "path": "/users/{{username}}",
+      "parameters": [
+        {
+          "name": "username",
+          "type": "string",
+          "description": "GitHub username",
+          "required": true,
+          "location": "path"
+        }
+      ]
+    },
+    {
+      "name": "get_authenticated_user",
+      "description": "Get the authenticated user's profile",
+      "method": "GET",
+      "path": "/user",
+      "parameters": []
+    },
+    {
+      "name": "list_repos",
+      "description": "List repositories for a GitHub user",
+      "method": "GET",
+      "path": "/users/{{owner}}/repos",
+      "parameters": [
+        {
+          "name": "owner",
+          "type": "string",
+          "description": "GitHub username or org",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "per_page",
+          "type": "string",
+          "description": "Results per page (max 100)",
+          "required": false,
+          "location": "query",
+          "default": "10"
+        },
+        {
+          "name": "sort",
+          "type": "string",
+          "description": "Sort by: created, updated, pushed, full_name",
+          "required": false,
+          "location": "query",
+          "default": "updated"
+        }
+      ]
+    },
+    {
+      "name": "get_repo",
+      "description": "Get detailed info about a repository",
+      "method": "GET",
+      "path": "/repos/{{owner}}/{{repo}}",
+      "parameters": [
+        {
+          "name": "owner",
+          "type": "string",
+          "description": "Repository owner",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "description": "Repository name",
+          "required": true,
+          "location": "path"
+        }
+      ]
+    },
+    {
+      "name": "list_issues",
+      "description": "List issues in a repository",
+      "method": "GET",
+      "path": "/repos/{{owner}}/{{repo}}/issues",
+      "parameters": [
+        {
+          "name": "owner",
+          "type": "string",
+          "description": "Repository owner",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "description": "Repository name",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "state",
+          "type": "string",
+          "description": "Filter: open, closed, all",
+          "required": false,
+          "location": "query",
+          "default": "open"
+        },
+        {
+          "name": "per_page",
+          "type": "string",
+          "description": "Results per page",
+          "required": false,
+          "location": "query",
+          "default": "10"
+        }
+      ]
+    },
+    {
+      "name": "create_issue",
+      "description": "Create a new issue in a repository",
+      "method": "POST",
+      "path": "/repos/{{owner}}/{{repo}}/issues",
+      "parameters": [
+        {
+          "name": "owner",
+          "type": "string",
+          "description": "Repository owner",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "description": "Repository name",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "description": "Issue title",
+          "required": true,
+          "location": "body"
+        },
+        {
+          "name": "body",
+          "type": "string",
+          "description": "Issue description",
+          "required": false,
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "list_pull_requests",
+      "description": "List pull requests in a repository",
+      "method": "GET",
+      "path": "/repos/{{owner}}/{{repo}}/pulls",
+      "parameters": [
+        {
+          "name": "owner",
+          "type": "string",
+          "description": "Repository owner",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "description": "Repository name",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "state",
+          "type": "string",
+          "description": "Filter: open, closed, all",
+          "required": false,
+          "location": "query",
+          "default": "open"
+        },
+        {
+          "name": "per_page",
+          "type": "string",
+          "description": "Results per page",
+          "required": false,
+          "location": "query",
+          "default": "10"
+        }
+      ]
+    },
+    {
+      "name": "get_file_contents",
+      "description": "Get contents of a file from a repository",
+      "method": "GET",
+      "path": "/repos/{{owner}}/{{repo}}/contents/{{path}}",
+      "parameters": [
+        {
+          "name": "owner",
+          "type": "string",
+          "description": "Repository owner",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "description": "Repository name",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "description": "File path in the repository",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "ref",
+          "type": "string",
+          "description": "Branch, tag, or commit SHA",
+          "required": false,
+          "location": "query"
+        }
+      ]
+    },
+    {
+      "name": "search_repos",
+      "description": "Search GitHub repositories",
+      "method": "GET",
+      "path": "/search/repositories",
+      "parameters": [
+        {
+          "name": "q",
+          "type": "string",
+          "description": "Search query",
+          "required": true,
+          "location": "query"
+        },
+        {
+          "name": "per_page",
+          "type": "string",
+          "description": "Results per page",
+          "required": false,
+          "location": "query",
+          "default": "5"
+        }
+      ]
+    },
+    {
+      "name": "search_code",
+      "description": "Search code across GitHub repositories",
+      "method": "GET",
+      "path": "/search/code",
+      "parameters": [
+        {
+          "name": "q",
+          "type": "string",
+          "description": "Search query (e.g. 'addClass repo:jquery/jquery')",
+          "required": true,
+          "location": "query"
+        },
+        {
+          "name": "per_page",
+          "type": "string",
+          "description": "Results per page",
+          "required": false,
+          "location": "query",
+          "default": "5"
+        }
+      ]
+    },
+    {
+      "name": "list_commits",
+      "description": "List commits in a repository",
+      "method": "GET",
+      "path": "/repos/{{owner}}/{{repo}}/commits",
+      "parameters": [
+        {
+          "name": "owner",
+          "type": "string",
+          "description": "Repository owner",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "description": "Repository name",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "per_page",
+          "type": "string",
+          "description": "Results per page",
+          "required": false,
+          "location": "query",
+          "default": "10"
+        },
+        {
+          "name": "sha",
+          "type": "string",
+          "description": "Branch name or commit SHA to start from",
+          "required": false,
+          "location": "query"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+# Build artifacts
+build/
+*.exe
+*.obj
+*.lib
+
+# IDE config files with sensitive tokens
+.vscode/mcp.json
+configs/claude_desktop_config.json
+configs/cursor_config.json
+configs/windsurf_config.json
+configs/*_config.json
+
+# Dependencies
+.cache/

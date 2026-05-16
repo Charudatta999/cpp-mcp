@@ -1,0 +1,134 @@
+{
+  "server": {
+    "name": "gitlab-gateway",
+    "version": "1.0.0"
+  },
+  "defaults": {
+    "base_url": "https://gitlab.com/api/v4",
+    "headers": {
+      "Content-Type": "application/json",
+      "User-Agent": "cpp-mcp-gateway/1.0"
+    },
+    "auth": {
+      "type": "api_key",
+      "header_name": "PRIVATE-TOKEN",
+      "key_env": "GITLAB_TOKEN"
+    }
+  },
+  "tools": [
+    {
+      "name": "list_projects",
+      "description": "List GitLab projects for the authenticated user",
+      "method": "GET",
+      "path": "/projects",
+      "parameters": [
+        {
+          "name": "per_page",
+          "type": "string",
+          "description": "Results per page",
+          "required": false,
+          "location": "query",
+          "default": "10"
+        },
+        {
+          "name": "membership",
+          "type": "string",
+          "description": "Only show projects the user is a member of (true/false)",
+          "required": false,
+          "location": "query",
+          "default": "true"
+        }
+      ]
+    },
+    {
+      "name": "get_project",
+      "description": "Get details of a GitLab project by ID or path",
+      "method": "GET",
+      "path": "/projects/{{project_id}}",
+      "parameters": [
+        {
+          "name": "project_id",
+          "type": "string",
+          "description": "Project ID or URL-encoded path (e.g. 'owner%2Frepo')",
+          "required": true,
+          "location": "path"
+        }
+      ]
+    },
+    {
+      "name": "list_merge_requests",
+      "description": "List merge requests for a project",
+      "method": "GET",
+      "path": "/projects/{{project_id}}/merge_requests",
+      "parameters": [
+        {
+          "name": "project_id",
+          "type": "string",
+          "description": "Project ID or URL-encoded path",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "state",
+          "type": "string",
+          "description": "Filter: opened, closed, merged, all",
+          "required": false,
+          "location": "query",
+          "default": "opened"
+        }
+      ]
+    },
+    {
+      "name": "list_issues",
+      "description": "List issues for a GitLab project",
+      "method": "GET",
+      "path": "/projects/{{project_id}}/issues",
+      "parameters": [
+        {
+          "name": "project_id",
+          "type": "string",
+          "description": "Project ID or URL-encoded path",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "state",
+          "type": "string",
+          "description": "Filter: opened, closed, all",
+          "required": false,
+          "location": "query",
+          "default": "opened"
+        }
+      ]
+    },
+    {
+      "name": "create_issue",
+      "description": "Create a new issue in a GitLab project",
+      "method": "POST",
+      "path": "/projects/{{project_id}}/issues",
+      "parameters": [
+        {
+          "name": "project_id",
+          "type": "string",
+          "description": "Project ID or URL-encoded path",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "description": "Issue title",
+          "required": true,
+          "location": "body"
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "description": "Issue description",
+          "required": false,
+          "location": "body"
+        }
+      ]
+    }
+  ]
+}

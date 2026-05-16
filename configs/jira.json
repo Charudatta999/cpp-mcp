@@ -1,0 +1,322 @@
+{
+  "server": {
+    "name": "jira-gateway",
+    "version": "2.0.0"
+  },
+  "defaults": {
+    "base_url": "https://YOUR_DOMAIN.atlassian.net/rest",
+    "headers": {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "User-Agent": "cpp-mcp-gateway/1.0"
+    },
+    "auth": {
+      "type": "basic",
+      "username_env": "JIRA_EMAIL",
+      "password_env": "JIRA_API_TOKEN"
+    }
+  },
+  "tools": [
+    {
+      "name": "jira_search",
+      "description": "Search Jira issues using JQL with customizable fields and pagination",
+      "method": "GET",
+      "path": "/api/3/search",
+      "parameters": [
+        { "name": "jql",        "type": "string", "description": "JQL query (e.g. 'project = PROJ AND status = Open')", "required": true,  "location": "query" },
+        { "name": "maxResults", "type": "string", "description": "Max results to return (default 10, max 100)",            "required": false, "location": "query", "default": "10" },
+        { "name": "startAt",   "type": "string", "description": "Index of first result for pagination",                   "required": false, "location": "query", "default": "0" },
+        { "name": "fields",    "type": "string", "description": "Comma-separated fields to return (e.g. summary,status,assignee)", "required": false, "location": "query" }
+      ]
+    },
+    {
+      "name": "jira_get_issue",
+      "description": "Get detailed info about a specific issue including status, assignee, description, subtasks, and available transitions",
+      "method": "GET",
+      "path": "/api/3/issue/{{issue_key}}",
+      "parameters": [
+        { "name": "issue_key", "type": "string", "description": "Issue key (e.g. PROJ-123)",                               "required": true,  "location": "path" },
+        { "name": "fields",   "type": "string", "description": "Comma-separated fields to return",                         "required": false, "location": "query" },
+        { "name": "expand",   "type": "string", "description": "Expand options: changelog, renderedFields, transitions",    "required": false, "location": "query" }
+      ]
+    },
+    {
+      "name": "jira_create_issue",
+      "description": "Create a new issue in a Jira project",
+      "method": "POST",
+      "path": "/api/3/issue",
+      "parameters": [
+        { "name": "project_key", "type": "string", "description": "Project key (e.g. MYPROJ)",                  "required": true,  "location": "body" },
+        { "name": "summary",     "type": "string", "description": "Issue summary/title",                        "required": true,  "location": "body" },
+        { "name": "description", "type": "string", "description": "Issue description (plain text)",              "required": false, "location": "body" },
+        { "name": "issuetype",   "type": "string", "description": "Issue type: Bug, Task, Story, Epic",         "required": false, "location": "body", "default": "Task" },
+        { "name": "priority",    "type": "string", "description": "Priority: Highest, High, Medium, Low, Lowest", "required": false, "location": "body" },
+        { "name": "assignee",    "type": "string", "description": "Assignee account ID",                        "required": false, "location": "body" },
+        { "name": "labels",      "type": "string", "description": "Comma-separated labels",                     "required": false, "location": "body" }
+      ]
+    },
+    {
+      "name": "jira_update_issue",
+      "description": "Update an existing issue's fields (supports partial updates)",
+      "method": "PUT",
+      "path": "/api/3/issue/{{issue_key}}",
+      "parameters": [
+        { "name": "issue_key",   "type": "string", "description": "Issue key (e.g. PROJ-123)",  "required": true,  "location": "path" },
+        { "name": "summary",     "type": "string", "description": "New summary",                "required": false, "location": "body" },
+        { "name": "description", "type": "string", "description": "New description",            "required": false, "location": "body" },
+        { "name": "priority",    "type": "string", "description": "New priority name",          "required": false, "location": "body" },
+        { "name": "assignee",    "type": "string", "description": "New assignee account ID",    "required": false, "location": "body" }
+      ]
+    },
+    {
+      "name": "jira_delete_issue",
+      "description": "Delete an issue and optionally its subtasks",
+      "method": "DELETE",
+      "path": "/api/3/issue/{{issue_key}}",
+      "parameters": [
+        { "name": "issue_key",       "type": "string", "description": "Issue key (e.g. PROJ-123)",           "required": true,  "location": "path" },
+        { "name": "deleteSubtasks", "type": "string", "description": "Delete subtasks too (true/false)",     "required": false, "location": "query", "default": "false" }
+      ]
+    },
+    {
+      "name": "jira_get_transitions",
+      "description": "List available status transitions for an issue",
+      "method": "GET",
+      "path": "/api/3/issue/{{issue_key}}/transitions",
+      "parameters": [
+        { "name": "issue_key", "type": "string", "description": "Issue key (e.g. PROJ-123)", "required": true, "location": "path" }
+      ]
+    },
+    {
+      "name": "jira_transition_issue",
+      "description": "Transition an issue to a new status using a transition ID",
+      "method": "POST",
+      "path": "/api/3/issue/{{issue_key}}/transitions",
+      "parameters": [
+        { "name": "issue_key",     "type": "string", "description": "Issue key (e.g. PROJ-123)", "required": true, "location": "path" },
+        { "name": "transition_id", "type": "string", "description": "Transition ID (get from jira_get_transitions)", "required": true, "location": "body" }
+      ]
+    },
+    {
+      "name": "jira_add_comment",
+      "description": "Add a comment to an issue",
+      "method": "POST",
+      "path": "/api/3/issue/{{issue_key}}/comment",
+      "parameters": [
+        { "name": "issue_key", "type": "string", "description": "Issue key (e.g. PROJ-123)", "required": true, "location": "path" },
+        { "name": "body",     "type": "string", "description": "Comment text",               "required": true, "location": "body" }
+      ]
+    },
+    {
+      "name": "jira_get_comments",
+      "description": "Retrieve all comments from an issue",
+      "method": "GET",
+      "path": "/api/3/issue/{{issue_key}}/comment",
+      "parameters": [
+        { "name": "issue_key",  "type": "string", "description": "Issue key (e.g. PROJ-123)", "required": true,  "location": "path" },
+        { "name": "maxResults", "type": "string", "description": "Max comments to return",    "required": false, "location": "query", "default": "50" },
+        { "name": "orderBy",   "type": "string", "description": "Order: created, -created",   "required": false, "location": "query", "default": "-created" }
+      ]
+    },
+    {
+      "name": "jira_add_worklog",
+      "description": "Add a worklog entry to track time spent on an issue",
+      "method": "POST",
+      "path": "/api/3/issue/{{issue_key}}/worklog",
+      "parameters": [
+        { "name": "issue_key",        "type": "string", "description": "Issue key (e.g. PROJ-123)",               "required": true, "location": "path" },
+        { "name": "timeSpentSeconds", "type": "string", "description": "Time spent in seconds (e.g. 3600 = 1h)", "required": true, "location": "body" },
+        { "name": "comment",          "type": "string", "description": "Worklog comment",                         "required": false, "location": "body" }
+      ]
+    },
+    {
+      "name": "jira_get_worklogs",
+      "description": "Get all worklog entries for an issue",
+      "method": "GET",
+      "path": "/api/3/issue/{{issue_key}}/worklog",
+      "parameters": [
+        { "name": "issue_key", "type": "string", "description": "Issue key (e.g. PROJ-123)", "required": true, "location": "path" }
+      ]
+    },
+    {
+      "name": "jira_get_issue_history",
+      "description": "Retrieve the complete change history/changelog of an issue",
+      "method": "GET",
+      "path": "/api/3/issue/{{issue_key}}/changelog",
+      "parameters": [
+        { "name": "issue_key", "type": "string", "description": "Issue key (e.g. PROJ-123)", "required": true, "location": "path" }
+      ]
+    },
+    {
+      "name": "jira_list_projects",
+      "description": "List all accessible Jira projects",
+      "method": "GET",
+      "path": "/api/3/project",
+      "parameters": [
+        { "name": "maxResults", "type": "string", "description": "Max results",       "required": false, "location": "query", "default": "50" },
+        { "name": "startAt",   "type": "string", "description": "Pagination offset", "required": false, "location": "query", "default": "0" }
+      ]
+    },
+    {
+      "name": "jira_get_project",
+      "description": "Get detailed info about a specific project",
+      "method": "GET",
+      "path": "/api/3/project/{{project_key}}",
+      "parameters": [
+        { "name": "project_key", "type": "string", "description": "Project key (e.g. MYPROJ)", "required": true, "location": "path" }
+      ]
+    },
+    {
+      "name": "jira_list_issue_types",
+      "description": "List all available issue types for a project with their IDs and descriptions",
+      "method": "GET",
+      "path": "/api/3/project/{{project_key}}/statuses",
+      "parameters": [
+        { "name": "project_key", "type": "string", "description": "Project key (e.g. MYPROJ)", "required": true, "location": "path" }
+      ]
+    },
+    {
+      "name": "jira_list_statuses",
+      "description": "List all available issue statuses for a project",
+      "method": "GET",
+      "path": "/api/3/project/{{project_key}}/statuses",
+      "parameters": [
+        { "name": "project_key", "type": "string", "description": "Project key", "required": true, "location": "path" }
+      ]
+    },
+    {
+      "name": "jira_assign_issue",
+      "description": "Assign an issue to a user",
+      "method": "PUT",
+      "path": "/api/3/issue/{{issue_key}}/assignee",
+      "parameters": [
+        { "name": "issue_key",  "type": "string", "description": "Issue key (e.g. PROJ-123)",                     "required": true, "location": "path" },
+        { "name": "accountId", "type": "string", "description": "Assignee account ID (use -1 to unassign)",       "required": true, "location": "body" }
+      ]
+    },
+    {
+      "name": "jira_link_issues",
+      "description": "Create a link between two issues defining their relationship",
+      "method": "POST",
+      "path": "/api/3/issueLink",
+      "parameters": [
+        { "name": "type",          "type": "string", "description": "Link type: Blocks, Clones, Duplicate, Relates", "required": true, "location": "body" },
+        { "name": "inwardIssue",  "type": "string", "description": "Inward issue key (e.g. PROJ-123)",               "required": true, "location": "body" },
+        { "name": "outwardIssue", "type": "string", "description": "Outward issue key (e.g. PROJ-456)",              "required": true, "location": "body" }
+      ]
+    },
+    {
+      "name": "jira_get_issue_watchers",
+      "description": "Get the list of watchers for an issue",
+      "method": "GET",
+      "path": "/api/3/issue/{{issue_key}}/watchers",
+      "parameters": [
+        { "name": "issue_key", "type": "string", "description": "Issue key (e.g. PROJ-123)", "required": true, "location": "path" }
+      ]
+    },
+    {
+      "name": "jira_add_watcher",
+      "description": "Add a watcher to an issue",
+      "method": "POST",
+      "path": "/api/3/issue/{{issue_key}}/watchers",
+      "parameters": [
+        { "name": "issue_key",  "type": "string", "description": "Issue key (e.g. PROJ-123)", "required": true, "location": "path" },
+        { "name": "accountId", "type": "string", "description": "Account ID of user to add",  "required": true, "location": "body" }
+      ]
+    },
+    {
+      "name": "jira_list_boards",
+      "description": "List all agile boards",
+      "method": "GET",
+      "path": "/agile/1.0/board",
+      "parameters": [
+        { "name": "maxResults",  "type": "string", "description": "Max results",                         "required": false, "location": "query", "default": "50" },
+        { "name": "projectKeyOrId", "type": "string", "description": "Filter by project key or ID",      "required": false, "location": "query" },
+        { "name": "type",        "type": "string", "description": "Board type: scrum, kanban, simple",   "required": false, "location": "query" }
+      ]
+    },
+    {
+      "name": "jira_list_sprints",
+      "description": "List all sprints for a board (active and future)",
+      "method": "GET",
+      "path": "/agile/1.0/board/{{board_id}}/sprint",
+      "parameters": [
+        { "name": "board_id",   "type": "string", "description": "Board ID",                              "required": true,  "location": "path" },
+        { "name": "state",      "type": "string", "description": "Filter: active, future, closed",        "required": false, "location": "query", "default": "active,future" },
+        { "name": "maxResults", "type": "string", "description": "Max results",                           "required": false, "location": "query", "default": "50" }
+      ]
+    },
+    {
+      "name": "jira_get_sprint",
+      "description": "Get detailed information about a specific sprint",
+      "method": "GET",
+      "path": "/agile/1.0/sprint/{{sprint_id}}",
+      "parameters": [
+        { "name": "sprint_id", "type": "string", "description": "Sprint ID", "required": true, "location": "path" }
+      ]
+    },
+    {
+      "name": "jira_get_sprint_issues",
+      "description": "Get all issues in a sprint",
+      "method": "GET",
+      "path": "/agile/1.0/sprint/{{sprint_id}}/issue",
+      "parameters": [
+        { "name": "sprint_id",  "type": "string", "description": "Sprint ID",        "required": true,  "location": "path" },
+        { "name": "maxResults", "type": "string", "description": "Max results",      "required": false, "location": "query", "default": "50" },
+        { "name": "fields",     "type": "string", "description": "Fields to return", "required": false, "location": "query" }
+      ]
+    },
+    {
+      "name": "jira_get_board_backlog",
+      "description": "Get issues in the backlog of a board",
+      "method": "GET",
+      "path": "/agile/1.0/board/{{board_id}}/backlog",
+      "parameters": [
+        { "name": "board_id",   "type": "string", "description": "Board ID",         "required": true,  "location": "path" },
+        { "name": "maxResults", "type": "string", "description": "Max results",      "required": false, "location": "query", "default": "50" }
+      ]
+    },
+    {
+      "name": "jira_list_versions",
+      "description": "List all versions/releases in a project",
+      "method": "GET",
+      "path": "/api/3/project/{{project_key}}/versions",
+      "parameters": [
+        { "name": "project_key", "type": "string", "description": "Project key (e.g. MYPROJ)", "required": true, "location": "path" }
+      ]
+    },
+    {
+      "name": "jira_get_version",
+      "description": "Get detailed information about a specific project version",
+      "method": "GET",
+      "path": "/api/3/version/{{version_id}}",
+      "parameters": [
+        { "name": "version_id", "type": "string", "description": "Version ID", "required": true, "location": "path" }
+      ]
+    },
+    {
+      "name": "jira_user_search",
+      "description": "Search for Jira users by name or email to find account IDs",
+      "method": "GET",
+      "path": "/api/3/user/search",
+      "parameters": [
+        { "name": "query",      "type": "string", "description": "Search query (name or email)", "required": true,  "location": "query" },
+        { "name": "maxResults", "type": "string", "description": "Max results",                  "required": false, "location": "query", "default": "10" }
+      ]
+    },
+    {
+      "name": "jira_get_myself",
+      "description": "Get the currently authenticated user's profile",
+      "method": "GET",
+      "path": "/api/3/myself",
+      "parameters": []
+    },
+    {
+      "name": "jira_get_server_info",
+      "description": "Get Jira server info including version and deployment type",
+      "method": "GET",
+      "path": "/api/3/serverInfo",
+      "parameters": []
+    }
+  ]
+}

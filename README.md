@@ -505,4 +505,4 @@ Example — Slack in 15 lines:
 
 ## License
 
-MIT
+GPL

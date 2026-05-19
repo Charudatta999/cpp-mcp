@@ -1,6 +1,7 @@
 #include "mcp/transport/http_transport.hpp"
 #include "mcp/core/errors.hpp"
 
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -10,6 +11,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
 #if MCP_HTTP_WINHTTP
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -24,26 +28,35 @@ namespace mcp {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+namespace {
+
+constexpr size_t kMaxHttpResponseSize = 50 * 1024 * 1024;
+constexpr int kHttpResolveTimeoutMs = 10000;
+constexpr int kHttpConnectTimeoutMs = 10000;
+constexpr int kHttpSendTimeoutMs = 30000;
+constexpr int kHttpReceiveTimeoutMs = 30000;
+
+std::string sanitize_header_value(const std::string& val) {
+    std::string safe;
+    safe.reserve(val.size());
+    for (char c : val) {
+        if (c != '\r' && c != '\n' && c != '\0') {
+            safe += c;
+        }
+    }
+    return safe;
+}
+
+} // namespace
+
 static std::wstring to_wide(const std::string& s) {
     if (s.empty()) return {};
     int len = MultiByteToWideChar(CP_UTF8, 0, s.data(),
                                    static_cast<int>(s.size()), nullptr, 0);
-    std::wstring ws(len, L'\0');
+    std::wstring ws(static_cast<size_t>(len), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, s.data(),
                         static_cast<int>(s.size()), ws.data(), len);
     return ws;
-}
-
-static std::string from_wide(const std::wstring& ws) {
-    if (ws.empty()) return {};
-    int len = WideCharToMultiByte(CP_UTF8, 0, ws.data(),
-                                   static_cast<int>(ws.size()),
-                                   nullptr, 0, nullptr, nullptr);
-    std::string s(len, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, ws.data(),
-                        static_cast<int>(ws.size()),
-                        s.data(), len, nullptr, nullptr);
-    return s;
 }
 
 /// Parse "http://host:port" into components.
@@ -105,6 +118,30 @@ void HttpClientTransport::start() {
         throw TransportError("WinHttpOpen failed");
     }
 
+    if (!WinHttpSetTimeouts(static_cast<HINTERNET>(session_),
+                            kHttpResolveTimeoutMs,
+                            kHttpConnectTimeoutMs,
+                            kHttpSendTimeoutMs,
+                            kHttpReceiveTimeoutMs)) {
+        WinHttpCloseHandle(static_cast<HINTERNET>(session_));
+        session_ = nullptr;
+        running_ = false;
+        throw TransportError("WinHttpSetTimeouts failed");
+    }
+
+    if (parts.use_ssl) {
+        DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
+        if (!WinHttpSetOption(static_cast<HINTERNET>(session_),
+                              WINHTTP_OPTION_SECURE_PROTOCOLS,
+                              &protocols,
+                              sizeof(protocols))) {
+            WinHttpCloseHandle(static_cast<HINTERNET>(session_));
+            session_ = nullptr;
+            running_ = false;
+            throw TransportError("WinHttpSetOption TLS policy failed");
+        }
+    }
+
     connection_ = WinHttpConnect(
         static_cast<HINTERNET>(session_),
         parts.host.c_str(), parts.port, 0);
@@ -159,13 +196,21 @@ std::string HttpClientTransport::post(const std::string& endpoint,
     {
         std::lock_guard lock(mutex_);
         if (!session_id_.empty()) {
-            headers += L"Mcp-Session-Id: " + to_wide(session_id_) + L"\r\n";
+            headers += L"Mcp-Session-Id: " + to_wide(sanitize_header_value(session_id_)) + L"\r\n";
         }
     }
 
-    WinHttpAddRequestHeaders(request, headers.c_str(),
-                              static_cast<DWORD>(headers.size()),
-                              WINHTTP_ADDREQ_FLAG_ADD);
+    if (!WinHttpAddRequestHeaders(request, headers.c_str(),
+                                  static_cast<DWORD>(headers.size()),
+                                  WINHTTP_ADDREQ_FLAG_ADD)) {
+        WinHttpCloseHandle(request);
+        throw TransportError("WinHttpAddRequestHeaders failed");
+    }
+
+    if (body.size() > (std::numeric_limits<DWORD>::max)()) {
+        WinHttpCloseHandle(request);
+        throw TransportError("HTTP request body too large");
+    }
 
     BOOL ok = WinHttpSendRequest(
         request, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
@@ -191,6 +236,10 @@ std::string HttpClientTransport::post(const std::string& endpoint,
     while (WinHttpReadData(request, buf.data(),
                             static_cast<DWORD>(buf.size()), &bytes_read)) {
         if (bytes_read == 0) break;
+        if (response.size() + bytes_read > kMaxHttpResponseSize) {
+            WinHttpCloseHandle(request);
+            throw TransportError("HTTP response too large");
+        }
         response.append(buf.data(), bytes_read);
     }
 
@@ -209,9 +258,31 @@ std::string HttpClientTransport::post(const std::string& endpoint,
 
 namespace mcp {
 
+namespace {
+
+constexpr size_t kMaxHttpResponseSize = 50 * 1024 * 1024;
+constexpr long kHttpConnectTimeoutMs = 10000;
+constexpr long kHttpReceiveTimeoutMs = 30000;
+
+std::string sanitize_header_value(const std::string& val) {
+    std::string safe;
+    safe.reserve(val.size());
+    for (char c : val) {
+        if (c != '\r' && c != '\n' && c != '\0') {
+            safe += c;
+        }
+    }
+    return safe;
+}
+
+} // namespace
+
 static size_t curl_write_cb(char* data, size_t size, size_t nmemb, void* ud) {
     auto* out = static_cast<std::string*>(ud);
     size_t total = size * nmemb;
+    if (out->size() + total > kMaxHttpResponseSize) {
+        return 0;
+    }
     out->append(data, total);
     return total;
 }
@@ -252,13 +323,16 @@ std::string HttpClientTransport::post(const std::string& endpoint,
                      static_cast<long>(body.size()));
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, kHttpConnectTimeoutMs);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, kHttpReceiveTimeoutMs);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
     {
         std::lock_guard lock(mutex_);
         if (!session_id_.empty()) {
-            std::string h = "Mcp-Session-Id: " + session_id_;
+            std::string h = "Mcp-Session-Id: " + sanitize_header_value(session_id_);
             headers = curl_slist_append(headers, h.c_str());
         }
     }

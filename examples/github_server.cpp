@@ -9,11 +9,16 @@
 /// Then run this server via stdio (Claude Desktop, Cursor, etc.)
 
 #include "mcp/mcp.hpp"
+#include "mcp/gateway/api_gateway.hpp"
 
 #include <cstdlib>
+#include <limits>
 #include <sstream>
 #include <string>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -23,11 +28,41 @@
 
 // ── GitHub API helper ────────────────────────────────────────────────────────
 
+namespace {
+
+constexpr size_t kMaxResponseSize = 50ULL * 1024ULL * 1024ULL;
+constexpr int kHttpResolveTimeoutMs = 10000;
+constexpr int kHttpConnectTimeoutMs = 10000;
+constexpr int kHttpSendTimeoutMs = 30000;
+constexpr int kHttpReceiveTimeoutMs = 30000;
+
+std::string encode_path_preserving_slashes(const std::string& value) {
+    std::string encoded;
+    std::string segment;
+    for (char ch : value) {
+        if (ch == '/') {
+            encoded += mcp::url_encode(segment);
+            encoded += '/';
+            segment.clear();
+        } else {
+            segment += ch;
+        }
+    }
+    encoded += mcp::url_encode(segment);
+    return encoded;
+}
+
+std::string repo_path(const std::string& owner, const std::string& repo) {
+    return "/repos/" + mcp::sanitize_path_param(owner) + "/" + mcp::sanitize_path_param(repo);
+}
+
+} // namespace
+
 static std::wstring to_wide(const std::string& s) {
     if (s.empty()) return {};
     int len = MultiByteToWideChar(CP_UTF8, 0, s.data(),
                                    static_cast<int>(s.size()), nullptr, 0);
-    std::wstring ws(len, L'\0');
+    std::wstring ws(static_cast<size_t>(len), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, s.data(),
                         static_cast<int>(s.size()), ws.data(), len);
     return ws;
@@ -48,6 +83,22 @@ static std::string github_api(const std::string& method,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) throw std::runtime_error("WinHttpOpen failed");
+
+    if (!WinHttpSetTimeouts(session,
+                            kHttpResolveTimeoutMs,
+                            kHttpConnectTimeoutMs,
+                            kHttpSendTimeoutMs,
+                            kHttpReceiveTimeoutMs)) {
+        WinHttpCloseHandle(session);
+        throw std::runtime_error("WinHttpSetTimeouts failed");
+    }
+
+    DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
+    if (!WinHttpSetOption(session, WINHTTP_OPTION_SECURE_PROTOCOLS,
+                          &protocols, sizeof(protocols))) {
+        WinHttpCloseHandle(session);
+        throw std::runtime_error("WinHttpSetOption TLS policy failed");
+    }
 
     HINTERNET connection = WinHttpConnect(
         session, L"api.github.com",
@@ -78,12 +129,17 @@ static std::string github_api(const std::string& method,
         L"User-Agent: cpp-mcp-github/1.0\r\n";
 
     if (!token.empty()) {
-        headers += L"Authorization: Bearer " + to_wide(token) + L"\r\n";
+        headers += L"Authorization: Bearer " + to_wide(mcp::sanitize_header_value(token)) + L"\r\n";
     }
 
-    WinHttpAddRequestHeaders(request, headers.c_str(),
-                              static_cast<DWORD>(headers.size()),
-                              WINHTTP_ADDREQ_FLAG_ADD);
+    if (!WinHttpAddRequestHeaders(request, headers.c_str(),
+                                  static_cast<DWORD>(headers.size()),
+                                  WINHTTP_ADDREQ_FLAG_ADD)) {
+        WinHttpCloseHandle(request);
+        WinHttpCloseHandle(connection);
+        WinHttpCloseHandle(session);
+        throw std::runtime_error("WinHttpAddRequestHeaders failed");
+    }
 
     BOOL ok;
     if (body.empty()) {
@@ -91,6 +147,12 @@ static std::string github_api(const std::string& method,
             WINHTTP_NO_ADDITIONAL_HEADERS, 0,
             WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
     } else {
+        if (body.size() > (std::numeric_limits<DWORD>::max)()) {
+            WinHttpCloseHandle(request);
+            WinHttpCloseHandle(connection);
+            WinHttpCloseHandle(session);
+            throw std::runtime_error("Request body too large");
+        }
         std::wstring ct = L"Content-Type: application/json\r\n";
         ok = WinHttpSendRequest(request,
             ct.c_str(), static_cast<DWORD>(ct.size()),
@@ -120,6 +182,12 @@ static std::string github_api(const std::string& method,
     DWORD bytes_read = 0;
     while (WinHttpReadData(request, buf, sizeof(buf), &bytes_read)) {
         if (bytes_read == 0) break;
+        if (response.size() + bytes_read > kMaxResponseSize) {
+            WinHttpCloseHandle(request);
+            WinHttpCloseHandle(connection);
+            WinHttpCloseHandle(session);
+            throw std::runtime_error("Response too large");
+        }
         response.append(buf, bytes_read);
     }
 
@@ -132,6 +200,18 @@ static std::string github_api(const std::string& method,
 // ── Convenience ──────────────────────────────────────────────────────────────
 
 static std::string get_token() {
+#ifdef _MSC_VER
+    char* tok = nullptr;
+    size_t len = 0;
+    if (_dupenv_s(&tok, &len, "GITHUB_TOKEN") != 0 || tok == nullptr || len == 0) {
+        throw std::runtime_error(
+            "GITHUB_TOKEN environment variable not set. "
+            "Create a token at https://github.com/settings/tokens");
+    }
+    std::string token(tok);
+    free(tok);
+    return token;
+#else
     const char* tok = std::getenv("GITHUB_TOKEN");
     if (!tok || std::string(tok).empty()) {
         throw std::runtime_error(
@@ -139,6 +219,7 @@ static std::string get_token() {
             "Create a token at https://github.com/settings/tokens");
     }
     return tok;
+#endif
 }
 
 static mcp::ToolResult text_result(const std::string& text) {
@@ -205,9 +286,10 @@ int main() {
 
                 std::string path;
                 if (owner.empty()) {
-                    path = "/user/repos?per_page=" + per_page + "&sort=updated";
+                    path = "/user/repos?per_page=" + mcp::url_encode(per_page) + "&sort=updated";
                 } else {
-                    path = "/users/" + owner + "/repos?per_page=" + per_page + "&sort=updated";
+                    path = "/users/" + mcp::sanitize_path_param(owner) +
+                           "/repos?per_page=" + mcp::url_encode(per_page) + "&sort=updated";
                 }
 
                 auto resp = github_api("GET", path, "", token);
@@ -236,7 +318,7 @@ int main() {
                 auto token = get_token();
                 auto owner = require_arg(args, "owner");
                 auto repo  = require_arg(args, "repo");
-                auto resp = github_api("GET", "/repos/" + owner + "/" + repo, "", token);
+                auto resp = github_api("GET", repo_path(owner, repo), "", token);
                 return text_result(resp);
             } catch (const std::exception& e) {
                 return error_result(e.what());
@@ -267,8 +349,9 @@ int main() {
                 auto state = opt_arg(args, "state", "open");
                 auto per_page = opt_arg(args, "per_page", "10");
 
-                auto path = "/repos/" + owner + "/" + repo +
-                            "/issues?state=" + state + "&per_page=" + per_page;
+                auto path = repo_path(owner, repo) +
+                            "/issues?state=" + mcp::url_encode(state) +
+                            "&per_page=" + mcp::url_encode(per_page);
                 auto resp = github_api("GET", path, "", token);
                 return text_result(resp);
             } catch (const std::exception& e) {
@@ -326,7 +409,7 @@ int main() {
                 }
 
                 auto json_body = mcp::json::stringify(doc);
-                auto path = "/repos/" + owner + "/" + repo + "/issues";
+                auto path = repo_path(owner, repo) + "/issues";
                 auto resp = github_api("POST", path, json_body, token);
                 return text_result(resp);
             } catch (const std::exception& e) {
@@ -358,8 +441,9 @@ int main() {
                 auto state = opt_arg(args, "state", "open");
                 auto per_page = opt_arg(args, "per_page", "10");
 
-                auto path = "/repos/" + owner + "/" + repo +
-                            "/pulls?state=" + state + "&per_page=" + per_page;
+                auto path = repo_path(owner, repo) +
+                            "/pulls?state=" + mcp::url_encode(state) +
+                            "&per_page=" + mcp::url_encode(per_page);
                 auto resp = github_api("GET", path, "", token);
                 return text_result(resp);
             } catch (const std::exception& e) {
@@ -387,15 +471,8 @@ int main() {
                 auto query = require_arg(args, "query");
                 auto per_page = opt_arg(args, "per_page", "10");
 
-                // URL-encode spaces as +
-                std::string encoded;
-                for (char c : query) {
-                    if (c == ' ') encoded += '+';
-                    else encoded += c;
-                }
-
-                auto path = "/search/repositories?q=" + encoded +
-                            "&per_page=" + per_page;
+                auto path = "/search/repositories?q=" + mcp::url_encode(query) +
+                            "&per_page=" + mcp::url_encode(per_page);
                 auto resp = github_api("GET", path, "", token);
                 return text_result(resp);
             } catch (const std::exception& e) {
@@ -427,9 +504,10 @@ int main() {
                 auto fpath = require_arg(args, "path");
                 auto ref   = opt_arg(args, "ref");
 
-                auto api_path = "/repos/" + owner + "/" + repo + "/contents/" + fpath;
+                auto api_path = repo_path(owner, repo) + "/contents/" +
+                                encode_path_preserving_slashes(fpath);
                 if (!ref.empty()) {
-                    api_path += "?ref=" + ref;
+                    api_path += "?ref=" + mcp::url_encode(ref);
                 }
 
                 auto resp = github_api("GET", api_path, "", token);
@@ -455,7 +533,7 @@ int main() {
             try {
                 auto token = get_token();
                 auto user = opt_arg(args, "username");
-                auto path = user.empty() ? "/user" : "/users/" + user;
+                auto path = user.empty() ? "/user" : "/users/" + mcp::sanitize_path_param(user);
                 auto resp = github_api("GET", path, "", token);
                 return text_result(resp);
             } catch (const std::exception& e) {

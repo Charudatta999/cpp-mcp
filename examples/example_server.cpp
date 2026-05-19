@@ -30,8 +30,14 @@ int main() {
 
     server.add_tool(time_tool, [](const mcp::ParamMap& /*args*/) -> mcp::ToolResult {
         std::time_t now = std::time(nullptr);
+        std::tm local_time{};
+#ifdef _WIN32
+        localtime_s(&local_time, &now);
+#else
+        localtime_r(&now, &local_time);
+#endif
         char buf[64];
-        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &local_time);
 
         mcp::ToolResult result;
         result.content.push_back(mcp::TextContent{buf});

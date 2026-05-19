@@ -8,6 +8,7 @@
 #include "rapidjson/stringbuffer.h"
 #include "rapidjson/writer.h"
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -26,14 +27,29 @@ inline std::string stringify(const rapidjson::Value& v) {
 
 /// Parse a JSON string into a document.  Throws on failure.
 inline rapidjson::Document parse(const std::string& raw) {
+    if (raw.find('\0') != std::string::npos) {
+        throw JsonRpcError(ErrorCode::ParseError,
+            "JSON parse error: embedded NUL byte");
+    }
+
     rapidjson::Document doc;
-    doc.Parse(raw.c_str());
+    doc.Parse(raw.data(), raw.size());
     if (doc.HasParseError()) {
         throw JsonRpcError(ErrorCode::ParseError,
             std::string("JSON parse error: ") +
             rapidjson::GetParseError_En(doc.GetParseError()));
     }
     return doc;
+}
+
+inline rapidjson::Value json_string(const std::string& value,
+                                    rapidjson::Document::AllocatorType& a) {
+    if (value.size() > (std::numeric_limits<rapidjson::SizeType>::max)()) {
+        throw JsonRpcError(ErrorCode::InvalidParams, "JSON string too large");
+    }
+    return rapidjson::Value(value.data(),
+                            static_cast<rapidjson::SizeType>(value.size()),
+                            a);
 }
 
 // ── JSON-RPC message builders ────────────────────────────────────────────────
@@ -61,10 +77,12 @@ inline std::string build_request(const RpcId& id, const std::string& method,
 
     if (!params_json.empty()) {
         rapidjson::Document params;
-        params.Parse(params_json.c_str());
-        if (!params.HasParseError()) {
-            doc.AddMember("params", rapidjson::Value(params, a), a);
+        try {
+            params = parse(params_json);
+        } catch (const JsonRpcError&) {
+            throw JsonRpcError(ErrorCode::InvalidParams, "Invalid JSON-RPC params JSON");
         }
+        doc.AddMember("params", rapidjson::Value(params, a), a);
     }
 
     return stringify(doc);
@@ -81,10 +99,12 @@ inline std::string build_notification(const std::string& method,
 
     if (!params_json.empty()) {
         rapidjson::Document params;
-        params.Parse(params_json.c_str());
-        if (!params.HasParseError()) {
-            doc.AddMember("params", rapidjson::Value(params, a), a);
+        try {
+            params = parse(params_json);
+        } catch (const JsonRpcError&) {
+            throw JsonRpcError(ErrorCode::InvalidParams, "Invalid JSON-RPC params JSON");
         }
+        doc.AddMember("params", rapidjson::Value(params, a), a);
     }
 
     return stringify(doc);
@@ -106,13 +126,12 @@ inline std::string build_response(const RpcId& id,
         doc.AddMember("id", rapidjson::Value(rapidjson::kNullType), a);
     }
 
-    rapidjson::Document result;
-    result.Parse(result_json.c_str());
-    if (!result.HasParseError()) {
+    try {
+        rapidjson::Document result = parse(result_json);
         doc.AddMember("result", rapidjson::Value(result, a), a);
-    } else {
+    } catch (const JsonRpcError&) {
         // Wrap raw string as result
-        doc.AddMember("result", rapidjson::Value(result_json.c_str(), a), a);
+        doc.AddMember("result", json_string(result_json, a), a);
     }
 
     return stringify(doc);
@@ -141,10 +160,12 @@ inline std::string build_error_response(const RpcId& id, int code,
 
     if (!data_json.empty()) {
         rapidjson::Document data;
-        data.Parse(data_json.c_str());
-        if (!data.HasParseError()) {
-            err.AddMember("data", rapidjson::Value(data, a), a);
+        try {
+            data = parse(data_json);
+        } catch (const JsonRpcError&) {
+            throw JsonRpcError(ErrorCode::InvalidParams, "Invalid JSON-RPC error data JSON");
         }
+        err.AddMember("data", rapidjson::Value(data, a), a);
     }
 
     doc.AddMember("error", err, a);
@@ -194,11 +215,16 @@ inline RpcResponse parse_response(const std::string& raw) {
     resp.id = extract_id(doc);
 
     if (doc.HasMember("error") && doc["error"].IsObject()) {
+        const auto& error = doc["error"];
+        if (!error.HasMember("code") || !error["code"].IsInt() ||
+            !error.HasMember("message") || !error["message"].IsString()) {
+            throw JsonRpcError(ErrorCode::InvalidRequest, "Invalid JSON-RPC error response");
+        }
         resp.is_error      = true;
-        resp.error_code    = doc["error"]["code"].GetInt();
-        resp.error_message = doc["error"]["message"].GetString();
-        if (doc["error"].HasMember("data")) {
-            resp.error_data_json = stringify(doc["error"]["data"]);
+        resp.error_code    = error["code"].GetInt();
+        resp.error_message = error["message"].GetString();
+        if (error.HasMember("data")) {
+            resp.error_data_json = stringify(error["data"]);
         }
     } else if (doc.HasMember("result")) {
         resp.result_json = stringify(doc["result"]);
@@ -292,10 +318,13 @@ inline rapidjson::Value serialize_tool_def(const ToolDefinition& tool,
     schema.AddMember("type", rapidjson::Value(tool.input_schema.type.c_str(), a), a);
 
     // Parse properties JSON
-    rapidjson::Document props;
-    props.Parse(tool.input_schema.properties_json.c_str());
-    if (!props.HasParseError() && props.IsObject()) {
-        schema.AddMember("properties", rapidjson::Value(props, a), a);
+    try {
+        rapidjson::Document props = parse(tool.input_schema.properties_json);
+        if (props.IsObject()) {
+            schema.AddMember("properties", rapidjson::Value(props, a), a);
+        }
+    } catch (const JsonRpcError&) {
+        // Invalid schema fragments are omitted to preserve legacy behavior.
     }
 
     if (!tool.input_schema.required.empty()) {

@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">cpp-mcp</h1>
   <p align="center">
-    A lightweight, zero-dependency C++17 framework for the
+    A lightweight, dependency-conscious C++20 framework for the
     <a href="https://modelcontextprotocol.io/">Model Context Protocol</a>.
     <br/>
     <b>One binary. Any REST API. Just JSON.</b>
@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/C%2B%2B-17-blue.svg" alt="C++17"/>
-  <img src="https://img.shields.io/badge/Dependencies-RapidJSON%20only-green.svg" alt="Dependencies"/>
+  <img src="https://img.shields.io/badge/C%2B%2B-20-blue.svg" alt="C++20"/>
+  <img src="https://img.shields.io/badge/Dependencies-RapidJSON%20%2B%20optional%20curl-green.svg" alt="Dependencies"/>
   <img src="https://img.shields.io/badge/Linking-Fully%20Static-purple.svg" alt="Static"/>
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg" alt="Platform"/>
-  <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License"/>
+  <img src="https://img.shields.io/badge/License-GPLv3-yellow.svg" alt="License"/>
 </p>
 
 ---
@@ -22,7 +22,7 @@
 
 MCP servers are typically written in Python or JavaScript. **cpp-mcp** gives you the same capability with:
 
-- **522 KB static binary** — no runtime dependencies, no Python, no Node.js
+- **Small native binary** — no Python or Node.js runtime
 - **Config-driven API gateway** — add GitHub, Jira, GitLab, Slack, or _any_ REST API by writing a JSON file. **Zero recompilation.**
 - **Fully static linking** — only depends on `KERNEL32.dll` on Windows
 - **Native HTTP** — WinHTTP on Windows, opt-in libcurl on Linux/macOS
@@ -85,7 +85,7 @@ That's it. Claude can now list repos, search code, create issues, and more.
 | **Path Templates** | `{{variable}}` substitution in URL paths |
 | **Param Routing** | Parameters auto-routed to path / query / body / header |
 | **Static Linking** | Single binary, zero runtime dependencies |
-| **C++17** | No Boost, no heavy frameworks |
+| **C++20** | No Boost, no heavy frameworks |
 
 ---
 
@@ -308,6 +308,15 @@ int main() {
 ## Project Structure
 
 ```
+
+## Production Roadmap
+
+The production hardening roadmap is tracked in:
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Security](docs/SECURITY.md)
+- [Plugin system](docs/PLUGINS.md)
+- [Benchmarking](docs/BENCHMARKS.md)
 cpp-mcp/
 ├── CMakeLists.txt
 ├── include/mcp/
@@ -384,7 +393,7 @@ cmake -B build -DMCP_USE_CURL=ON \
 
 | Binary | Size | DLL Dependencies |
 |--------|------|-----------------|
-| `api_gateway.exe` | 522 KB | `KERNEL32.dll` only |
+| `api_gateway.exe` | platform/build dependent | `KERNEL32.dll` only on fully static Windows builds |
 | `example_server.exe` | 420 KB | `KERNEL32.dll` only |
 | `example_calculator.exe` | 462 KB | `KERNEL32.dll` only |
 
@@ -505,4 +514,4 @@ Example — Slack in 15 lines:
 
 ## License
 
-GPL
+GPLv3

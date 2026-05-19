@@ -11,6 +11,7 @@
 
 #include "rapidjson/document.h"
 
+#include <cctype>
 #include <cstdlib>
 #include <functional>
 #include <fstream>
@@ -98,6 +99,60 @@ inline AuthType parse_auth_type(const std::string& s) {
     return AuthType::None;
 }
 
+inline bool is_valid_header_name(const std::string& name) {
+    if (name.empty()) {
+        return false;
+    }
+    for (char ch : name) {
+        const auto c = static_cast<unsigned char>(ch);
+        if (std::isalnum(c) || c == '!' || c == '#' || c == '$' ||
+            c == '%' || c == '&' || c == '\'' || c == '*' ||
+            c == '+' || c == '-' || c == '.' || c == '^' ||
+            c == '_' || c == '`' || c == '|' || c == '~') {
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
+inline std::string sanitize_header_value(const std::string& val);
+
+inline void set_validated_header(std::unordered_map<std::string, std::string>& headers,
+                                 const std::string& name,
+                                 const std::string& value) {
+    if (!is_valid_header_name(name)) {
+        throw McpError("Invalid HTTP header name: " + name);
+    }
+    headers[name] = sanitize_header_value(value);
+}
+
+inline void require_string_member(const rapidjson::Value& obj,
+                                  const char* key,
+                                  std::string& out,
+                                  const char* context) {
+    if (!obj.HasMember(key)) {
+        return;
+    }
+    if (!obj[key].IsString()) {
+        throw McpError(std::string(context) + "." + key + " must be a string");
+    }
+    out = obj[key].GetString();
+}
+
+inline void require_bool_member(const rapidjson::Value& obj,
+                                const char* key,
+                                bool& out,
+                                const char* context) {
+    if (!obj.HasMember(key)) {
+        return;
+    }
+    if (!obj[key].IsBool()) {
+        throw McpError(std::string(context) + "." + key + " must be a boolean");
+    }
+    out = obj[key].GetBool();
+}
+
 /// Load and parse an API gateway config from a JSON file.
 inline ApiGatewayConfig load_api_config(const std::string& filepath) {
     // Read file
@@ -115,40 +170,52 @@ inline ApiGatewayConfig load_api_config(const std::string& filepath) {
     // Server info
     if (doc.HasMember("server") && doc["server"].IsObject()) {
         const auto& s = doc["server"];
-        if (s.HasMember("name"))    config.server_name    = s["name"].GetString();
-        if (s.HasMember("version")) config.server_version = s["version"].GetString();
+        require_string_member(s, "name", config.server_name, "server");
+        require_string_member(s, "version", config.server_version, "server");
+    } else if (doc.HasMember("server")) {
+        throw McpError("server must be an object");
     }
 
     // Defaults
     if (doc.HasMember("defaults") && doc["defaults"].IsObject()) {
         const auto& d = doc["defaults"];
 
-        if (d.HasMember("base_url"))
-            config.base_url = d["base_url"].GetString();
+        require_string_member(d, "base_url", config.base_url, "defaults");
 
         if (d.HasMember("headers") && d["headers"].IsObject()) {
             for (auto it = d["headers"].MemberBegin();
                  it != d["headers"].MemberEnd(); ++it) {
-                config.default_headers[it->name.GetString()] =
-                    it->value.GetString();
+                if (!it->value.IsString()) {
+                    throw McpError("defaults.headers values must be strings");
+                }
+                set_validated_header(config.default_headers,
+                                     it->name.GetString(),
+                                     it->value.GetString());
             }
+        } else if (d.HasMember("headers")) {
+            throw McpError("defaults.headers must be an object");
         }
 
         if (d.HasMember("auth") && d["auth"].IsObject()) {
             const auto& a = d["auth"];
-            if (a.HasMember("type"))
-                config.auth.type = parse_auth_type(a["type"].GetString());
-            if (a.HasMember("token_env"))
-                config.auth.token_env = a["token_env"].GetString();
-            if (a.HasMember("username_env"))
-                config.auth.username_env = a["username_env"].GetString();
-            if (a.HasMember("password_env"))
-                config.auth.password_env = a["password_env"].GetString();
-            if (a.HasMember("header_name"))
-                config.auth.header_name = a["header_name"].GetString();
-            if (a.HasMember("key_env"))
-                config.auth.key_env = a["key_env"].GetString();
+            std::string auth_type;
+            require_string_member(a, "type", auth_type, "defaults.auth");
+            if (!auth_type.empty()) {
+                config.auth.type = parse_auth_type(auth_type);
+            }
+            require_string_member(a, "token_env", config.auth.token_env, "defaults.auth");
+            require_string_member(a, "username_env", config.auth.username_env, "defaults.auth");
+            require_string_member(a, "password_env", config.auth.password_env, "defaults.auth");
+            require_string_member(a, "header_name", config.auth.header_name, "defaults.auth");
+            require_string_member(a, "key_env", config.auth.key_env, "defaults.auth");
+            if (!config.auth.header_name.empty() && !is_valid_header_name(config.auth.header_name)) {
+                throw McpError("defaults.auth.header_name is not a valid HTTP header name");
+            }
+        } else if (d.HasMember("auth")) {
+            throw McpError("defaults.auth must be an object");
         }
+    } else if (doc.HasMember("defaults")) {
+        throw McpError("defaults must be an object");
     }
 
     // Tools / endpoints
@@ -156,35 +223,59 @@ inline ApiGatewayConfig load_api_config(const std::string& filepath) {
         for (const auto& t : doc["tools"].GetArray()) {
             ApiEndpoint ep;
 
-            if (t.HasMember("name"))        ep.name        = t["name"].GetString();
-            if (t.HasMember("description")) ep.description = t["description"].GetString();
-            if (t.HasMember("method"))      ep.method      = t["method"].GetString();
-            if (t.HasMember("path"))        ep.path        = t["path"].GetString();
-            if (t.HasMember("base_url"))    ep.base_url_override = t["base_url"].GetString();
+            require_string_member(t, "name", ep.name, "tools[]");
+            require_string_member(t, "description", ep.description, "tools[]");
+            require_string_member(t, "method", ep.method, "tools[]");
+            require_string_member(t, "path", ep.path, "tools[]");
+            require_string_member(t, "base_url", ep.base_url_override, "tools[]");
 
             if (t.HasMember("headers") && t["headers"].IsObject()) {
                 for (auto it = t["headers"].MemberBegin();
                      it != t["headers"].MemberEnd(); ++it) {
-                    ep.extra_headers[it->name.GetString()] =
-                        it->value.GetString();
+                    if (!it->value.IsString()) {
+                        throw McpError("tools[].headers values must be strings");
+                    }
+                    set_validated_header(ep.extra_headers,
+                                         it->name.GetString(),
+                                         it->value.GetString());
                 }
+            } else if (t.HasMember("headers")) {
+                throw McpError("tools[].headers must be an object");
             }
 
             if (t.HasMember("parameters") && t["parameters"].IsArray()) {
                 for (const auto& p : t["parameters"].GetArray()) {
                     ApiParam param;
-                    if (p.HasMember("name"))        param.name        = p["name"].GetString();
-                    if (p.HasMember("type"))         param.type        = p["type"].GetString();
-                    if (p.HasMember("description"))  param.description = p["description"].GetString();
-                    if (p.HasMember("required"))     param.required    = p["required"].GetBool();
-                    if (p.HasMember("location"))     param.location    = parse_location(p["location"].GetString());
-                    if (p.HasMember("default"))      param.default_value = p["default"].GetString();
+                    require_string_member(p, "name", param.name, "tools[].parameters[]");
+                    require_string_member(p, "type", param.type, "tools[].parameters[]");
+                    require_string_member(p, "description", param.description, "tools[].parameters[]");
+                    require_bool_member(p, "required", param.required, "tools[].parameters[]");
+                    std::string location;
+                    require_string_member(p, "location", location, "tools[].parameters[]");
+                    if (!location.empty()) {
+                        param.location = parse_location(location);
+                    }
+                    require_string_member(p, "default", param.default_value, "tools[].parameters[]");
+                    if (param.name.empty()) {
+                        throw McpError("tools[].parameters[].name is required");
+                    }
                     ep.parameters.push_back(std::move(param));
                 }
+            } else if (t.HasMember("parameters")) {
+                throw McpError("tools[].parameters must be an array");
+            }
+
+            if (ep.name.empty()) {
+                throw McpError("tools[].name is required");
+            }
+            if (ep.path.empty()) {
+                throw McpError("tools[].path is required");
             }
 
             config.endpoints.push_back(std::move(ep));
         }
+    } else if (doc.HasMember("tools")) {
+        throw McpError("tools must be an array");
     }
 
     return config;
@@ -197,7 +288,8 @@ inline ApiGatewayConfig load_api_config(const std::string& filepath) {
 inline std::string sanitize_path_param(const std::string& value) {
     std::string safe;
     safe.reserve(value.size());
-    for (unsigned char c : value) {
+    for (char ch : value) {
+        const auto c = static_cast<unsigned char>(ch);
         if (c == '/' || c == '\\' || c == '?' || c == '#' ||
             c == '\0' || c == '\r' || c == '\n') {
             safe += '_';
@@ -241,7 +333,8 @@ inline std::string url_encode(const std::string& s) {
     static const char hex[] = "0123456789ABCDEF";
     std::string result;
     result.reserve(s.size() * 3);
-    for (unsigned char c : s) {
+    for (char ch : s) {
+        const auto c = static_cast<unsigned char>(ch);
         if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
             result += static_cast<char>(c);
         } else {

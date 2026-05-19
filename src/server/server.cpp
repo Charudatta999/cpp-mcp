@@ -98,8 +98,9 @@ void McpServer::handle_message(const std::string& raw) {
             NullId{}, static_cast<int>(e.code()), e.what());
         transport_->send(err);
     } catch (const std::exception& e) {
+        std::cerr << "[cpp-mcp] Internal server error: " << e.what() << "\n";
         auto err = json::build_error_response(
-            NullId{}, static_cast<int>(ErrorCode::InternalError), e.what());
+            NullId{}, static_cast<int>(ErrorCode::InternalError), "Internal server error");
         transport_->send(err);
     }
 }
@@ -223,9 +224,10 @@ std::string McpServer::handle_tools_call(const RpcId& id,
         auto result = it->second.handler(args);
         return json::build_response(id, json::serialize_tool_result(result));
     } catch (const std::exception& e) {
+        std::cerr << "[cpp-mcp] Tool handler failed: " << e.what() << "\n";
         ToolResult err_result;
         err_result.is_error = true;
-        err_result.content.push_back(TextContent{e.what()});
+        err_result.content.push_back(TextContent{"Tool execution failed"});
         return json::build_response(id,
             json::serialize_tool_result(err_result));
     }
@@ -267,8 +269,9 @@ std::string McpServer::handle_resources_read(const RpcId& id,
         return json::build_response(id,
             json::serialize_resource_content(content));
     } catch (const std::exception& e) {
+        std::cerr << "[cpp-mcp] Resource handler failed: " << e.what() << "\n";
         return json::build_error_response(
-            id, static_cast<int>(ErrorCode::InternalError), e.what());
+            id, static_cast<int>(ErrorCode::InternalError), "Resource read failed");
     }
 }
 
@@ -314,8 +317,9 @@ std::string McpServer::handle_prompts_get(const RpcId& id,
         return json::build_response(id,
             json::serialize_prompt_result(result));
     } catch (const std::exception& e) {
+        std::cerr << "[cpp-mcp] Prompt handler failed: " << e.what() << "\n";
         return json::build_error_response(
-            id, static_cast<int>(ErrorCode::InternalError), e.what());
+            id, static_cast<int>(ErrorCode::InternalError), "Prompt execution failed");
     }
 }
 

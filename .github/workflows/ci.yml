@@ -33,6 +33,20 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure
 
+      - name: Upload Windows binaries
+        if: matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-binaries
+          path: |
+            build/Release/api_gateway.exe
+            build/Release/cpp_mcp_tests.exe
+            build/Release/auth_tests.exe
+            build/Release/example_server.exe
+            build/Release/example_calculator.exe
+            build/Release/github_server.exe
+            build/Release/benchmark_smoke.exe
+
   build-linux-oel8:
     name: Linux (OEL8, glibc 2.28, GCC 13, vendored static)
     runs-on: ubuntu-latest
@@ -49,6 +63,10 @@ jobs:
           container_id=$(docker create cpp-mcp-oel8)
           docker cp "$container_id:/src/build/api_gateway" ./api_gateway
           docker cp "$container_id:/src/build/cpp_mcp_tests" ./cpp_mcp_tests
+          docker cp "$container_id:/src/build/auth_tests" ./auth_tests
+          docker cp "$container_id:/src/build/example_server" ./example_server
+          docker cp "$container_id:/src/build/example_calculator" ./example_calculator
+          docker cp "$container_id:/src/build/benchmark_smoke" ./benchmark_smoke
           docker rm "$container_id"
           echo "=== Static linkage verification ==="
           ldd ./api_gateway | grep -vE 'linux-vdso|ld-linux' || true
@@ -57,10 +75,14 @@ jobs:
       - name: Upload Linux binaries
         uses: actions/upload-artifact@v4
         with:
-          name: linux-oel8-binaries
+          name: linux-oel8-x64-binaries
           path: |
             api_gateway
             cpp_mcp_tests
+            auth_tests
+            example_server
+            example_calculator
+            benchmark_smoke
 
   sanitizers:
     name: Sanitizers (Ubuntu, Clang 17, ASan+UBSan)
@@ -91,3 +113,63 @@ jobs:
 
       - name: Test under ASan/UBSan
         run: ctest --test-dir build --output-on-failure
+
+  release:
+    name: Create Release
+    needs: [build-windows, build-linux-oel8, sanitizers]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-binaries
+          path: windows-x64
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-oel8-x64-binaries
+          path: linux-x64
+
+      - name: Package release archives
+        run: |
+          cd windows-x64 && zip -r ../cpp-mcp-windows-x64.zip . && cd ..
+          cd linux-x64 && chmod +x * && tar czf ../cpp-mcp-linux-x64-oel8.tar.gz . && cd ..
+
+      - name: Generate release tag
+        id: tag
+        run: echo "tag=v1.0.0-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "cpp-mcp ${{ steps.tag.outputs.tag }}"
+          body: |
+            ## cpp-mcp Release ${{ steps.tag.outputs.tag }}
+
+            ### Downloads
+            - **Windows x64**: `cpp-mcp-windows-x64.zip` — MSVC Release build
+            - **Linux x64**: `cpp-mcp-linux-x64-oel8.tar.gz` — GCC 13, glibc 2.28+, fully static (vendored OpenSSL + curl)
+
+            ### What's included
+            - `api_gateway` — config-driven REST-to-MCP gateway
+            - `cpp_mcp_tests` / `auth_tests` — test suites
+            - `example_server` / `example_calculator` — example MCP servers
+            - `benchmark_smoke` — benchmark executable
+
+            ### Compatibility
+            - **Windows**: Any x64 Windows 10+ (no runtime deps, static MSVC CRT)
+            - **Linux**: Any x64 distro with glibc >= 2.28 (RHEL 8+, OEL 8+, Ubuntu 20.04+, Amazon Linux 2)
+          files: |
+            cpp-mcp-windows-x64.zip
+            cpp-mcp-linux-x64-oel8.tar.gz
+          draft: false
+          prerelease: false

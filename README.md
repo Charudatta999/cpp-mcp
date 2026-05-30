@@ -2,7 +2,7 @@
   <h1 align="center">cpp-mcp</h1>
   <p align="center">
     A lightweight, dependency-conscious C++20 framework for the
-    <a href="https://modelcontextprotocol.io/">Model Context Protocol</a>.
+    <a href="https://modelcontextprotocol.io/">Model Context Protocol (MCP)</a>.
     <br/>
     <b>One binary. Any REST API. Just JSON.</b>
   </p>
@@ -16,6 +16,10 @@
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg" alt="Platform"/>
   <img src="https://img.shields.io/badge/License-LGPLv3-blue.svg" alt="License"/>
 </p>
+
+> **C++ MCP Server** | **MCP C++ SDK** | **Config-driven MCP API Gateway** | **Static MCP binary for AI agents**
+>
+> Build MCP servers in C++ with zero runtime dependencies. A secure, supply-chain-safe alternative to Python and TypeScript MCP implementations. Fully static binary with AES-256-GCM transport authentication for enterprise deployment. Works with Claude Desktop, VS Code Copilot, Cursor, and any MCP-compatible AI client.
 
 ---
 
@@ -622,3 +626,26 @@ Linux binaries are built against **glibc 2.28** (the lowest supported enterprise
 ## License
 
 **LGPL-3.0** — you can link cpp-mcp into commercial/proprietary products without open-sourcing your application. If you modify cpp-mcp itself, those modifications must be released under LGPL-3.0.
+
+---
+
+## Comparison with Other MCP Implementations
+
+| | **cpp-mcp** | Python/TS MCP servers | Other C++ MCP libs |
+|---|---|---|---|
+| **Runtime deps** | None (static binary) | Python/Node.js + 200+ packages | Dynamic libs (httplib, nlohmann-json) |
+| **Supply chain surface** | RapidJSON only (header-only, bundled) | PyPI/npm ecosystem | Git submodules |
+| **API gateway** | Config-driven, zero code | Requires code per integration | Not available |
+| **Transport auth** | AES-256-GCM (platform-native) | Token headers | Token headers |
+| **Enterprise Linux** | OEL8/glibc 2.28, CI-verified static | Depends on system Python | Not addressed |
+| **Binary size** | Single static executable | Entire runtime + venv | Dynamic, multiple shared libs |
+
+---
+
+<sub>
+<b>Keywords:</b> C++ MCP server, Model Context Protocol C++, MCP SDK C++, MCP API gateway,
+cpp mcp framework, C++ AI agent, MCP static binary, secure MCP server, MCP Claude Desktop,
+MCP VS Code, MCP Cursor, JSON-RPC C++, REST to MCP, supply chain secure MCP,
+enterprise MCP server, C++20 MCP, static linked MCP, AES-256-GCM MCP auth,
+MCP server no dependencies, MCP alternative to Python, mcp-server-cpp
+</sub>

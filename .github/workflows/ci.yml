@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          fetch-depth: 1
 
       - name: Configure
         run: >
@@ -39,7 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          fetch-depth: 1
 
       - name: Build OEL8 container (vendored OpenSSL 3.3 + curl 8.11, -Werror)
         run: docker build -t cpp-mcp-oel8 -f Containerfile.oel8 .
@@ -68,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          fetch-depth: 1
 
       - name: Install dependencies
         run: |

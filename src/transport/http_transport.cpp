@@ -1,10 +1,44 @@
 #include "mcp/transport/http_transport.hpp"
+#include "mcp/auth/auth.hpp"
 #include "mcp/core/errors.hpp"
 
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Platform-independent auth method implementations
+//  (included once, before the first #if block)
+// ═══════════════════════════════════════════════════════════════════════════
+
+namespace mcp {
+
+void HttpClientTransport::set_auth(auth::KeyConfig config) {
+    std::lock_guard lock(mutex_);
+    auth_provider_ = std::make_unique<auth::AuthProvider>(std::move(config));
+}
+
+void HttpClientTransport::set_auth_token(const std::string& token) {
+    std::lock_guard lock(mutex_);
+    auth_token_ = token;
+    // Pre-encrypt so we don't re-encrypt on every request
+    if (auth_provider_ && auth_provider_->is_enabled()) {
+        auth_header_cache_ = auth_provider_->encrypt_for_header(token);
+    }
+}
+
+bool HttpClientTransport::has_auth() const noexcept {
+    // auth_provider_ read is safe: set_auth is called before start()
+    return auth_provider_ && auth_provider_->is_enabled();
+}
+
+std::string HttpClientTransport::last_validated_token() const {
+    std::lock_guard lock(const_cast<std::mutex&>(mutex_));
+    return last_validated_;
+}
+
+} // namespace mcp
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  WinHTTP backend (Windows-only, no external deps)
@@ -66,6 +100,7 @@ struct UrlParts {
     bool          use_ssl{false};
 };
 
+// [FIX #3] Wrap std::stoi in try/catch, validate port range 0-65535.
 static UrlParts parse_url(const std::string& base_url) {
     UrlParts parts;
 
@@ -85,8 +120,17 @@ static UrlParts parse_url(const std::string& base_url) {
     auto colon = url.find(':');
     if (colon != std::string::npos) {
         parts.host = to_wide(url.substr(0, colon));
-        parts.port = static_cast<INTERNET_PORT>(
-            std::stoi(url.substr(colon + 1)));
+        try {
+            int port_val = std::stoi(url.substr(colon + 1));
+            if (port_val < 0 || port_val > 65535) {
+                throw TransportError("Port number out of range (0-65535)");
+            }
+            parts.port = static_cast<INTERNET_PORT>(port_val);
+        } catch (const std::invalid_argument&) {
+            throw TransportError("Invalid port number in URL");
+        } catch (const std::out_of_range&) {
+            throw TransportError("Port number out of range in URL");
+        }
     } else {
         parts.host = to_wide(url);
     }
@@ -103,11 +147,17 @@ HttpClientTransport::~HttpClientTransport() {
     stop();
 }
 
+// [FIX #5] Cache parsed URL parts during start(), reuse in post().
 void HttpClientTransport::start() {
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true)) return;
 
     auto parts = parse_url(base_url_);
+
+    // Cache for reuse in post()
+    url_parts_.host    = parts.host;
+    url_parts_.port    = parts.port;
+    url_parts_.use_ssl = parts.use_ssl;
 
     session_ = WinHttpOpen(L"cpp-mcp/1.0",
                            WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
@@ -153,16 +203,22 @@ void HttpClientTransport::start() {
     }
 }
 
+// [FIX #2] Guard connection_/session_ with mutex_ to prevent data race
+// between concurrent stop() and post() calls.
 void HttpClientTransport::stop() {
-    running_ = false;
-    if (connection_) {
-        WinHttpCloseHandle(static_cast<HINTERNET>(connection_));
+    running_.store(false, std::memory_order_release);
+
+    void* conn = nullptr;
+    void* sess = nullptr;
+    {
+        std::lock_guard lock(mutex_);
+        conn = connection_;
+        sess = session_;
         connection_ = nullptr;
-    }
-    if (session_) {
-        WinHttpCloseHandle(static_cast<HINTERNET>(session_));
         session_ = nullptr;
     }
+    if (conn) WinHttpCloseHandle(static_cast<HINTERNET>(conn));
+    if (sess) WinHttpCloseHandle(static_cast<HINTERNET>(sess));
 }
 
 void HttpClientTransport::send(const std::string& message) {
@@ -170,19 +226,24 @@ void HttpClientTransport::send(const std::string& message) {
     (void)post(endpoint_, message);
 }
 
+// [FIX #2] Snapshot connection_ under lock before using it.
+// [FIX #5] Use cached url_parts_ instead of re-parsing base_url_.
 std::string HttpClientTransport::post(const std::string& endpoint,
                                        const std::string& body) {
-    if (!connection_) {
+    void* conn_snapshot = nullptr;
+    {
+        std::lock_guard lock(mutex_);
+        conn_snapshot = connection_;
+    }
+    if (!conn_snapshot) {
         throw TransportError("HTTP transport not started");
     }
 
-    auto parts = parse_url(base_url_);
     auto wpath = to_wide(endpoint);
-
-    DWORD flags = parts.use_ssl ? WINHTTP_FLAG_SECURE : 0;
+    DWORD flags = url_parts_.use_ssl ? WINHTTP_FLAG_SECURE : 0;
 
     HINTERNET request = WinHttpOpenRequest(
-        static_cast<HINTERNET>(connection_),
+        static_cast<HINTERNET>(conn_snapshot),
         L"POST", wpath.c_str(), nullptr,
         WINHTTP_NO_REFERER,
         WINHTTP_DEFAULT_ACCEPT_TYPES,
@@ -197,6 +258,9 @@ std::string HttpClientTransport::post(const std::string& endpoint,
         std::lock_guard lock(mutex_);
         if (!session_id_.empty()) {
             headers += L"Mcp-Session-Id: " + to_wide(sanitize_header_value(session_id_)) + L"\r\n";
+        }
+        if (!auth_header_cache_.empty()) {
+            headers += L"Mcp-Auth-Token: " + to_wide(sanitize_header_value(auth_header_cache_)) + L"\r\n";
         }
     }
 
@@ -277,6 +341,33 @@ std::string sanitize_header_value(const std::string& val) {
 
 } // namespace
 
+// [FIX #1] CurlInit RAII guard -- owns curl_global_init/cleanup lifecycle.
+// Caller creates exactly one instance on the stack in main().
+static bool g_curl_initialized = false;
+
+CurlInit::CurlInit() {
+    if (g_curl_initialized) {
+        throw TransportError(
+            "Only one mcp::CurlInit instance may exist at a time");
+    }
+    CURLcode rc = curl_global_init(CURL_GLOBAL_DEFAULT);
+    if (rc != CURLE_OK) {
+        throw TransportError(
+            std::string("curl_global_init failed: ") +
+            curl_easy_strerror(rc));
+    }
+    g_curl_initialized = true;
+}
+
+CurlInit::~CurlInit() {
+    curl_global_cleanup();
+    g_curl_initialized = false;
+}
+
+bool CurlInit::is_initialized() noexcept {
+    return g_curl_initialized;
+}
+
 static size_t curl_write_cb(char* data, size_t size, size_t nmemb, void* ud) {
     auto* out = static_cast<std::string*>(ud);
     size_t total = size * nmemb;
@@ -292,16 +383,22 @@ HttpClientTransport::HttpClientTransport(std::string base_url)
 
 HttpClientTransport::~HttpClientTransport() { stop(); }
 
+// [FIX #1] start() checks CurlInit guard instead of calling curl_global_init.
 void HttpClientTransport::start() {
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true)) return;
-    curl_global_init(CURL_GLOBAL_DEFAULT);
+
+    if (!CurlInit::is_initialized()) {
+        running_ = false;
+        throw TransportError(
+            "No mcp::CurlInit instance is alive. "
+            "Create one on the stack in main() before starting transports.");
+    }
 }
 
+// [FIX #1] stop() no longer calls curl_global_cleanup -- CurlInit owns that.
 void HttpClientTransport::stop() {
-    if (running_.exchange(false)) {
-        curl_global_cleanup();
-    }
+    running_.store(false, std::memory_order_release);
 }
 
 void HttpClientTransport::send(const std::string& message) {
@@ -335,6 +432,10 @@ std::string HttpClientTransport::post(const std::string& endpoint,
             std::string h = "Mcp-Session-Id: " + sanitize_header_value(session_id_);
             headers = curl_slist_append(headers, h.c_str());
         }
+        if (!auth_header_cache_.empty()) {
+            std::string h2 = "Mcp-Auth-Token: " + sanitize_header_value(auth_header_cache_);
+            headers = curl_slist_append(headers, h2.c_str());
+        }
     }
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
@@ -351,9 +452,7 @@ std::string HttpClientTransport::post(const std::string& endpoint,
 
 } // namespace mcp
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  No HTTP backend available — stub that always throws
-// ═══════════════════════════════════════════════════════════════════════════
+// No HTTP backend available -- stub that always throws
 #else
 
 namespace mcp {

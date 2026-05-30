@@ -1,12 +1,12 @@
 #include "mcp/server/server.hpp"
 #include "mcp/core/errors.hpp"
 #include "mcp/core/json_utils.hpp"
+#include "mcp/core/log.hpp"
 #include "mcp/core/types.hpp"
 
 #include "rapidjson/document.h"
 
 #include <chrono>
-#include <iostream>
 #include <thread>
 #include <utility>
 
@@ -44,25 +44,31 @@ void McpServer::start() {
     transport_->start();
 }
 
+// [FIX #7] Replace 50ms busy-wait with condition_variable.
+// Uses wait_for with 500ms timeout as fallback, since the Transport
+// interface lacks a close callback and the stdio reader thread can
+// exit without calling stop().
 void McpServer::run() {
     start();
-    // Block until transport closes
+    std::unique_lock lock(run_mutex_);
     while (transport_->is_running()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        run_cv_.wait_for(lock, std::chrono::milliseconds(500));
     }
 }
 
+// [FIX #7] Notify the CV so run() wakes up promptly on stop().
 void McpServer::stop() {
     if (transport_) {
         transport_->stop();
     }
+    run_cv_.notify_all();
 }
 
 // ── Message handling ─────────────────────────────────────────────────────────
 
 void McpServer::handle_message(const std::string& raw) {
     try {
-        // [H2] Parse once — eliminates double-parse (CWE-407)
+        // [H2] Parse once -- eliminates double-parse (CWE-407)
         auto doc = json::parse(raw);
 
         if (!doc.IsObject() || !doc.HasMember("method") || !doc["method"].IsString()) {
@@ -98,7 +104,7 @@ void McpServer::handle_message(const std::string& raw) {
             NullId{}, static_cast<int>(e.code()), e.what());
         transport_->send(err);
     } catch (const std::exception& e) {
-        std::cerr << "[cpp-mcp] Internal server error: " << e.what() << "\n";
+        MCP_ERROR(std::string("Internal server error: ") + e.what());
         auto err = json::build_error_response(
             NullId{}, static_cast<int>(ErrorCode::InternalError), "Internal server error");
         transport_->send(err);
@@ -112,8 +118,9 @@ std::string McpServer::dispatch(const std::string& method,
         return handle_initialize(id, params_json);
     }
 
+    // [FIX #8] Use atomic load with acquire ordering.
     // All other methods require initialization
-    if (!initialized_ && method != "ping") {
+    if (!initialized_.load(std::memory_order_acquire) && method != "ping") {
         return json::build_error_response(
             id, static_cast<int>(ErrorCode::ServerNotInitialized),
             "Server not initialized");
@@ -146,7 +153,8 @@ std::string McpServer::dispatch(const std::string& method,
 
 std::string McpServer::handle_initialize(const RpcId& id,
                                           const std::string& /*params*/) {
-    initialized_ = true;
+    // [FIX #8] Use atomic store with release ordering.
+    initialized_.store(true, std::memory_order_release);
 
     rapidjson::Document doc(rapidjson::kObjectType);
     auto& a = doc.GetAllocator();
@@ -209,9 +217,11 @@ std::string McpServer::handle_tools_call(const RpcId& id,
     std::string tool_name = doc["name"].GetString();
     auto it = tools_.find(tool_name);
     if (it == tools_.end()) {
+        // [FIX #6] Truncate tool name in error to prevent amplification (CWE-20).
+        std::string safe_name = tool_name.substr(0, 128);
         return json::build_error_response(
             id, static_cast<int>(ErrorCode::InvalidParams),
-            "Unknown tool: " + tool_name);
+            "Unknown tool: " + safe_name);
     }
 
     // Extract arguments
@@ -224,7 +234,7 @@ std::string McpServer::handle_tools_call(const RpcId& id,
         auto result = it->second.handler(args);
         return json::build_response(id, json::serialize_tool_result(result));
     } catch (const std::exception& e) {
-        std::cerr << "[cpp-mcp] Tool handler failed: " << e.what() << "\n";
+        MCP_ERROR(std::string("Tool handler failed: ") + e.what());
         ToolResult err_result;
         err_result.is_error = true;
         err_result.content.push_back(TextContent{"Tool execution failed"});
@@ -259,9 +269,11 @@ std::string McpServer::handle_resources_read(const RpcId& id,
     std::string uri = doc["uri"].GetString();
     auto it = resources_.find(uri);
     if (it == resources_.end()) {
+        // [FIX #6] Truncate URI in error to prevent amplification (CWE-20).
+        std::string safe_uri = uri.substr(0, 128);
         return json::build_error_response(
             id, static_cast<int>(ErrorCode::InvalidParams),
-            "Unknown resource: " + uri);
+            "Unknown resource: " + safe_uri);
     }
 
     try {
@@ -269,7 +281,7 @@ std::string McpServer::handle_resources_read(const RpcId& id,
         return json::build_response(id,
             json::serialize_resource_content(content));
     } catch (const std::exception& e) {
-        std::cerr << "[cpp-mcp] Resource handler failed: " << e.what() << "\n";
+        MCP_ERROR(std::string("Resource handler failed: ") + e.what());
         return json::build_error_response(
             id, static_cast<int>(ErrorCode::InternalError), "Resource read failed");
     }
@@ -301,9 +313,11 @@ std::string McpServer::handle_prompts_get(const RpcId& id,
     std::string prompt_name = doc["name"].GetString();
     auto it = prompts_.find(prompt_name);
     if (it == prompts_.end()) {
+        // [FIX #6] Truncate prompt name in error to prevent amplification (CWE-20).
+        std::string safe_name = prompt_name.substr(0, 128);
         return json::build_error_response(
             id, static_cast<int>(ErrorCode::InvalidParams),
-            "Unknown prompt: " + prompt_name);
+            "Unknown prompt: " + safe_name);
     }
 
     // Extract arguments
@@ -317,7 +331,7 @@ std::string McpServer::handle_prompts_get(const RpcId& id,
         return json::build_response(id,
             json::serialize_prompt_result(result));
     } catch (const std::exception& e) {
-        std::cerr << "[cpp-mcp] Prompt handler failed: " << e.what() << "\n";
+        MCP_ERROR(std::string("Prompt handler failed: ") + e.what());
         return json::build_error_response(
             id, static_cast<int>(ErrorCode::InternalError), "Prompt execution failed");
     }

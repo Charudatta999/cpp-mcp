@@ -1,0 +1,47 @@
+FROM oraclelinux:8 AS builder
+
+# Enable C++20 via gcc-toolset-13 (GCC 13.x) and install build deps.
+# perl-core + perl-IPC-Cmd are required for OpenSSL's Configure script.
+# No openssl-devel or libcurl-devel — we build those from source.
+RUN dnf install -y \
+        gcc-toolset-13-gcc \
+        gcc-toolset-13-gcc-c++ \
+        gcc-toolset-13-libstdc++-devel \
+        cmake \
+        make \
+        perl-core \
+        perl-IPC-Cmd \
+    && dnf clean all
+
+# Copy source tree (build/ and _build/ excluded via .containerignore)
+COPY . /src
+WORKDIR /src
+
+# Step 1: Build vendored OpenSSL + curl from source (static libs).
+# Cap parallelism to avoid overwhelming container I/O on constrained hosts.
+ENV NPROC_OVERRIDE=4
+RUN source /opt/rh/gcc-toolset-13/enable && \
+    chmod +x third_party/build_deps.sh && \
+    third_party/build_deps.sh all && \
+    third_party/build_deps.sh clean
+
+# Step 2: Build cpp-mcp against the vendored static libs
+RUN source /opt/rh/gcc-toolset-13/enable && \
+    cmake -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DMCP_BUILD_TESTS=ON \
+        -DMCP_BUILD_EXAMPLES=ON \
+        -DMCP_BUILD_GATEWAY=ON \
+        -DMCP_BUILD_BENCHMARKS=ON \
+        -DMCP_WARNINGS_AS_ERRORS=ON && \
+    cmake --build build -j$(nproc)
+
+# Step 3: Run tests
+RUN source /opt/rh/gcc-toolset-13/enable && \
+    ctest --test-dir build --output-on-failure
+
+# Step 4: Verify static linkage — no system libssl/libcurl/libcrypto deps
+RUN echo "=== Shared library dependencies ===" && \
+    ldd build/cpp_mcp_tests 2>&1 | grep -vE 'linux-vdso|ld-linux' && \
+    ! ldd build/cpp_mcp_tests 2>&1 | grep -qE 'libssl|libcrypto|libcurl' && \
+    echo "OK: no shared openssl/curl dependencies"

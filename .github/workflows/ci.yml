@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DMCP_BUILD_TESTS=ON
+          -DMCP_BUILD_EXAMPLES=ON
+          -DMCP_BUILD_GATEWAY=ON
+          -DMCP_BUILD_BENCHMARKS=ON
+          -DMCP_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build_type }}
+
+      - name: Test
+        run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure
+
+  build-linux-oel8:
+    name: Linux (OEL8, glibc 2.28, GCC 13, vendored static)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build OEL8 container (vendored OpenSSL 3.3 + curl 8.11, -Werror)
+        run: docker build -t cpp-mcp-oel8 -f Containerfile.oel8 .
+
+      - name: Extract binaries
+        run: |
+          container_id=$(docker create cpp-mcp-oel8)
+          docker cp "$container_id:/src/build/api_gateway" ./api_gateway
+          docker cp "$container_id:/src/build/cpp_mcp_tests" ./cpp_mcp_tests
+          docker rm "$container_id"
+          echo "=== Static linkage verification ==="
+          ldd ./api_gateway | grep -vE 'linux-vdso|ld-linux' || true
+          ! ldd ./api_gateway | grep -qE 'libssl|libcrypto|libcurl' && echo "OK: fully static (no shared openssl/curl)"
+
+      - name: Upload Linux binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-oel8-binaries
+          path: |
+            api_gateway
+            cpp_mcp_tests
+
+  sanitizers:
+    name: Sanitizers (Ubuntu, Clang 17, ASan+UBSan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libssl-dev
+
+      - name: Configure with sanitizers
+        env:
+          CC: clang-17
+          CXX: clang++-17
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DMCP_BUILD_TESTS=ON
+          -DMCP_ENABLE_SANITIZERS=ON
+          -DMCP_USE_CURL=ON
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Test under ASan/UBSan
+        run: ctest --test-dir build --output-on-failure

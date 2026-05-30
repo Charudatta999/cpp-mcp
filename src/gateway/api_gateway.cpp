@@ -186,8 +186,18 @@ static UrlParts parse_base_url(const std::string& url) {
     auto colon = host_port.find(':');
     if (colon != std::string::npos) {
         parts.host = to_wide(host_port.substr(0, colon));
-        parts.port = static_cast<INTERNET_PORT>(
-            std::stoi(host_port.substr(colon + 1)));
+        // [FIX #3] Wrap std::stoi in try/catch, validate port range.
+        try {
+            int port_val = std::stoi(host_port.substr(colon + 1));
+            if (port_val < 0 || port_val > 65535) {
+                throw std::runtime_error("Port number out of range (0-65535)");
+            }
+            parts.port = static_cast<INTERNET_PORT>(port_val);
+        } catch (const std::invalid_argument&) {
+            throw std::runtime_error("Invalid port number in base_url");
+        } catch (const std::out_of_range&) {
+            throw std::runtime_error("Port number out of range in base_url");
+        }
     } else {
         parts.host = to_wide(host_port);
     }

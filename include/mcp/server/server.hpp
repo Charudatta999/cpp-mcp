@@ -3,13 +3,16 @@
 #include "mcp/core/types.hpp"
 #include "mcp/transport/transport.hpp"
 
+#include <atomic>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 
 namespace mcp {
 
-/// MCP Server — registers tools, resources, prompts, and handles
+/// MCP Server -- registers tools, resources, prompts, and handles
 /// the full JSON-RPC lifecycle including initialization handshake.
 class McpServer {
 public:
@@ -19,12 +22,12 @@ public:
     McpServer(const McpServer&)            = delete;
     McpServer& operator=(const McpServer&) = delete;
 
-    // ── Registration ─────────────────────────────────────────────
+    // -- Registration -------------------------------------------------
     void add_tool(ToolDefinition def, ToolHandler handler);
     void add_resource(ResourceDefinition def, ResourceHandler handler);
     void add_prompt(PromptDefinition def, PromptHandler handler);
 
-    // ── Lifecycle ────────────────────────────────────────────────
+    // -- Lifecycle ----------------------------------------------------
     /// Start the server (begins listening on transport).
     void start();
 
@@ -52,7 +55,13 @@ private:
 
     Implementation                info_;
     std::unique_ptr<Transport>    transport_;
-    bool                          initialized_{false};
+    // [FIX #8] Promote to atomic for thread-safety if a multi-threaded
+    // transport ever dispatches to handle_initialize / dispatch concurrently.
+    std::atomic<bool>             initialized_{false};
+
+    // [FIX #7] Condition variable to replace the 50ms busy-wait in run().
+    std::mutex                    run_mutex_;
+    std::condition_variable       run_cv_;
 
     struct ToolEntry {
         ToolDefinition def;

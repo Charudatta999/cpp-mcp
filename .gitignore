@@ -1,15 +1,58 @@
-# Build artifacts
+# Scripts with secrets
+push_via_mcp.ps1
+
+# Build output
 build/
-*.exe
+out/
+cmake-build-*/
+*.o
 *.obj
-*.lib
+*.exe
+*.dll
+*.so
+*.dylib
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.sln.docstates
+CMakeSettings.json
+CMakePresets.json
 
 # IDE config files with sensitive tokens
-.vscode/mcp.json
 configs/claude_desktop_config.json
 configs/cursor_config.json
 configs/windsurf_config.json
 configs/*_config.json
 
+# Generated
+compile_commands.json
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+
 # Dependencies
 .cache/
+
+# Third-party build artifacts (sources, temp build files)
+third_party/_build/
+# But DO track precompiled static libs and headers:
+#   third_party/openssl/include/  — committed
+#   third_party/openssl/lib/*.a   — committed
+#   third_party/curl/include/     — committed
+#   third_party/curl/lib/*.a      — committed
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Test artifacts
+auth-test-bin/
+build-test-bin/
+bad_gateway_config.json

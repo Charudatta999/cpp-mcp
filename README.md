@@ -9,11 +9,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Charudatta999/cpp-mcp/actions"><img src="https://github.com/Charudatta999/cpp-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
   <img src="https://img.shields.io/badge/C%2B%2B-20-blue.svg" alt="C++20"/>
-  <img src="https://img.shields.io/badge/Dependencies-RapidJSON%20%2B%20optional%20curl-green.svg" alt="Dependencies"/>
+  <img src="https://img.shields.io/badge/Dependencies-RapidJSON%20only-green.svg" alt="Dependencies"/>
   <img src="https://img.shields.io/badge/Linking-Fully%20Static-purple.svg" alt="Static"/>
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg" alt="Platform"/>
-  <img src="https://img.shields.io/badge/License-GPLv3-yellow.svg" alt="License"/>
+  <img src="https://img.shields.io/badge/License-LGPLv3-blue.svg" alt="License"/>
 </p>
 
 ---
@@ -24,34 +25,57 @@ MCP servers are typically written in Python or JavaScript. **cpp-mcp** gives you
 
 - **Small native binary** — no Python or Node.js runtime
 - **Config-driven API gateway** — add GitHub, Jira, GitLab, Slack, or _any_ REST API by writing a JSON file. **Zero recompilation.**
-- **Fully static linking** — only depends on `KERNEL32.dll` on Windows
-- **Native HTTP** — WinHTTP on Windows, opt-in libcurl on Linux/macOS
+- **Fully static linking** — only depends on `KERNEL32.dll` on Windows; zero shared deps for vendored Linux builds
+- **Native HTTP** — WinHTTP on Windows, vendored static libcurl on Linux/macOS
+- **AES-256-GCM transport auth** — platform-native crypto (BCrypt/CNG on Windows, OpenSSL on Unix)
 
 ## Quick Start
 
-### Build (Windows + Clang)
+### Build (Windows)
 
 ```bash
-git clone https://github.com/your-org/cpp-mcp.git
+git clone https://github.com/Charudatta999/cpp-mcp.git
 cd cpp-mcp
 cmake -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
 cmake --build build
+```
+
+### Build (Linux — vendored static)
+
+```bash
+# Build vendored OpenSSL 3.3 + curl 8.11 from source (one-time)
+chmod +x third_party/build_deps.sh
+third_party/build_deps.sh all
+
+# Build cpp-mcp against vendored static libs
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+
+# Clean source artifacts (keeps compiled static libs)
+third_party/build_deps.sh clean
+```
+
+### Build (Linux — Container, e.g. Oracle Linux 8)
+
+```bash
+podman build -t cpp-mcp-oel8 -f Containerfile.oel8 .
+# Builds vendored deps, compiles, runs tests, verifies static linkage
 ```
 
 ### Connect any REST API — no code needed
 
 ```bash
 # GitHub — 11 tools, zero code
-api_gateway.exe configs/github.json
+api_gateway configs/github.json
 
 # Jira — 30 tools, zero code
-api_gateway.exe configs/jira.json
+api_gateway configs/jira.json
 
 # GitLab — 5 tools, zero code
-api_gateway.exe configs/gitlab.json
+api_gateway configs/gitlab.json
 
 # Your own API — write a JSON config, zero code
-api_gateway.exe configs/your_api.json
+api_gateway configs/your_api.json
 ```
 
 ### Use with Claude Desktop
@@ -79,19 +103,25 @@ That's it. Claude can now list repos, search code, create issues, and more.
 | **MCP Primitives** | Tools, Resources, Prompts — full spec |
 | **JSON-RPC 2.0** | Request, response, notification, error lifecycle |
 | **Stdio Transport** | For Claude Desktop, Cursor, VS Code Copilot, Windsurf |
-| **HTTP Transport** | WinHTTP (Windows), libcurl (Linux/macOS) |
+| **HTTP Client Transport** | WinHTTP (Windows), libcurl (Linux/macOS) |
+| **HTTP Server Transport** | Built-in TCP server for hosting MCP over HTTP POST |
 | **API Gateway** | Config-driven, supports any REST API |
-| **Auth** | Bearer token, Basic auth, API key header |
+| **REST Auth** | Bearer token, Basic auth, API key header |
+| **Transport Auth** | AES-256-GCM encrypted token header (BCrypt on Windows, OpenSSL on Unix) |
 | **Path Templates** | `{{variable}}` substitution in URL paths |
 | **Param Routing** | Parameters auto-routed to path / query / body / header |
+| **Signal Handling** | Graceful SIGINT/SIGTERM shutdown with cleanup callbacks |
+| **Structured Logging** | Leveled logging (Trace→Fatal) with pluggable sinks |
 | **Static Linking** | Single binary, zero runtime dependencies |
+| **CI/CD** | GitHub Actions: Windows MSVC, Linux OEL8 glibc 2.28 (GCC 13), ASan/UBSan |
+| **Container Build** | Containerfile for Oracle Linux 8 (enterprise Linux) |
 | **C++20** | No Boost, no heavy frameworks |
 
 ---
 
 ## The API Gateway
 
-The killer feature. One compiled binary (`api_gateway.exe`) turns any REST API into an MCP server at runtime via a JSON config:
+The killer feature. One compiled binary (`api_gateway`) turns any REST API into an MCP server at runtime via a JSON config:
 
 ### Config Schema
 
@@ -171,13 +201,38 @@ The killer feature. One compiled binary (`api_gateway.exe`) turns any REST API i
 | `body` | Assembled into JSON request body |
 | `header` | Sent as HTTP header |
 
-### Auth Types
+### REST Auth Types
 
 | Type | Config | Env Vars |
 |------|--------|----------|
 | `bearer` | `"token_env": "VAR_NAME"` | `VAR_NAME=ghp_xxx` |
 | `basic` | `"username_env"` + `"password_env"` | `USER=x`, `PASS=y` |
 | `api_key` | `"header_name"` + `"key_env"` | `KEY=xxx` |
+
+---
+
+## Transport Authentication (AES-256-GCM)
+
+For securing MCP transport channels (e.g. HTTP server mode), cpp-mcp provides symmetric-key authentication using AES-256-GCM:
+
+- **256-bit key**, **96-bit random IV** per encryption, **128-bit GCM auth tag**
+- Encrypted token sent as `Mcp-Auth-Token` HTTP header
+- Server decrypts and validates at the transport layer, before any JSON-RPC dispatch
+
+**Key provisioning** — pick whichever suits your deployment:
+
+| Source | How |
+|--------|-----|
+| Environment variable | `MCP_AUTH_KEY=<64-hex-chars>` |
+| File | Raw 32 bytes or 64 hex chars on disk |
+| Programmatic | Pass raw bytes via `KeyConfig` |
+
+**Crypto backends** — zero external deps on Windows:
+
+| Platform | Backend | Notes |
+|----------|---------|-------|
+| Windows | BCrypt (CNG) | FIPS 140-2 certified, ships with OS |
+| Linux/macOS | OpenSSL libcrypto | Hardware-accelerated, vendored or system |
 
 ---
 
@@ -190,8 +245,8 @@ Ready-to-use configs in `configs/`:
 Search repos, list issues/PRs/commits, get file contents, create issues, and more.
 
 ```bash
-set GITHUB_TOKEN=ghp_xxxxx
-api_gateway.exe configs/github.json
+export GITHUB_TOKEN=ghp_xxxxx
+./api_gateway configs/github.json
 ```
 
 | Tool | Description |
@@ -210,12 +265,12 @@ api_gateway.exe configs/github.json
 
 ### Jira — 30 tools
 
-Full Jira coverage aggregated from [sooperset/mcp-atlassian](https://github.com/sooperset/mcp-atlassian) (5.2k★) and [nguyenvanduocit/jira-mcp](https://github.com/nguyenvanduocit/jira-mcp).
+Full Jira coverage including issues, sprints, boards, worklogs, and more.
 
 ```bash
-set JIRA_EMAIL=you@company.com
-set JIRA_API_TOKEN=your_token
-api_gateway.exe configs/jira.json
+export JIRA_EMAIL=you@company.com
+export JIRA_API_TOKEN=your_token
+./api_gateway configs/jira.json
 ```
 
 | Category | Tools |
@@ -237,8 +292,8 @@ api_gateway.exe configs/jira.json
 ### GitLab — 5 tools
 
 ```bash
-set GITLAB_TOKEN=glpat-xxxxx
-api_gateway.exe configs/gitlab.json
+export GITLAB_TOKEN=glpat-xxxxx
+./api_gateway configs/gitlab.json
 ```
 
 | Tool | Description |
@@ -282,6 +337,25 @@ int main() {
 }
 ```
 
+### HTTP Server
+
+```cpp
+#include "mcp/mcp.hpp"
+
+int main() {
+    mcp::HttpServerConfig config;
+    config.bind_address = "127.0.0.1";
+    config.port = 8080;
+
+    auto transport = std::make_unique<mcp::HttpServerTransport>(config);
+    mcp::McpServer server({"my-server", "1.0.0"}, std::move(transport));
+
+    // Register tools, resources, prompts...
+    mcp::install_signal_handlers([&]() { server.stop(); });
+    server.run();
+}
+```
+
 ### HTTP Client
 
 ```cpp
@@ -299,7 +373,7 @@ int main() {
         printf("Tool: %s\n", t.name.c_str());
 
     auto result = client.call_tool("hello", {{"name", "World"}});
-    // result.content[0] → TextContent{"Hello, World!"}
+    // result.content[0] -> TextContent{"Hello, World!"}
 }
 ```
 
@@ -308,55 +382,51 @@ int main() {
 ## Project Structure
 
 ```
-
-## Production Roadmap
-
-The production hardening roadmap is tracked in:
-
-- [Architecture](docs/ARCHITECTURE.md)
-- [Security](docs/SECURITY.md)
-- [Plugin system](docs/PLUGINS.md)
-- [Benchmarking](docs/BENCHMARKS.md)
 cpp-mcp/
 ├── CMakeLists.txt
+├── Containerfile.oel8              # OEL8 container build (vendored static)
+├── .github/workflows/ci.yml       # CI: Windows MSVC, Linux GCC/Clang, ASan
 ├── include/mcp/
-│   ├── mcp.hpp                    # Umbrella include
+│   ├── mcp.hpp                     # Umbrella include
 │   ├── core/
-│   │   ├── types.hpp              # MCP type definitions
-│   │   ├── errors.hpp             # Error codes & exceptions
-│   │   └── json_utils.hpp         # JSON-RPC builders & parsers
+│   │   ├── types.hpp               # MCP type definitions
+│   │   ├── errors.hpp              # Error codes & exceptions
+│   │   ├── json_utils.hpp          # JSON-RPC builders & parsers
+│   │   └── log.hpp                 # Structured leveled logging
 │   ├── transport/
-│   │   ├── transport.hpp          # Abstract transport interface
-│   │   ├── stdio_transport.hpp    # Stdin/stdout transport
-│   │   └── http_transport.hpp     # HTTP client transport
+│   │   ├── transport.hpp           # Abstract transport interface
+│   │   ├── stdio_transport.hpp     # Stdin/stdout transport
+│   │   ├── http_transport.hpp      # HTTP client transport (WinHTTP/curl)
+│   │   └── http_server_transport.hpp # HTTP server transport (TCP)
 │   ├── server/
-│   │   └── server.hpp             # MCP server
+│   │   ├── server.hpp              # MCP server
+│   │   └── signal_handler.hpp      # Graceful shutdown signal handling
 │   ├── client/
-│   │   └── client.hpp             # MCP client
+│   │   └── client.hpp              # MCP client
+│   ├── auth/
+│   │   └── auth.hpp                # AES-256-GCM transport auth
 │   └── gateway/
-│       └── api_gateway.hpp        # Config-driven API gateway
-├── src/
-│   ├── transport/
-│   │   ├── stdio_transport.cpp
-│   │   └── http_transport.cpp
-│   ├── server/
-│   │   └── server.cpp
-│   ├── client/
-│   │   └── client.cpp
-│   └── gateway/
-│       └── api_gateway.cpp        # Generic API gateway binary
+│       └── api_gateway.hpp         # Config-driven API gateway
+├── src/                            # Implementation files
 ├── examples/
-│   ├── example_server.cpp         # Tool + Resource + Prompt demo
-│   ├── example_calculator.cpp     # Calculator tool server
-│   └── github_server.cpp          # Hardcoded GitHub server (legacy)
-├── configs/                       # Ready-to-use API configs
-│   ├── github.json                # GitHub API — 11 tools
-│   ├── jira.json                  # Jira API — 30 tools
-│   ├── gitlab.json                # GitLab API — 5 tools
-│   └── README.md                  # Client config guide
+│   ├── example_server.cpp          # Tool + Resource + Prompt demo
+│   ├── example_calculator.cpp      # Calculator tool server
+│   └── github_server.cpp           # Hardcoded GitHub server (legacy)
+├── tests/
+│   ├── cpp_mcp_tests.cpp           # Core protocol tests
+│   └── auth_tests.cpp              # Auth module tests
+├── benchmarks/
+│   └── benchmark_smoke.cpp         # Benchmark smoke tests
+├── configs/                        # Ready-to-use API configs
+│   ├── github.json                 # GitHub API — 11 tools
+│   ├── jira.json                   # Jira API — 30 tools
+│   └── gitlab.json                 # GitLab API — 5 tools
 └── third_party/
-    └── rapidjson/                 # Header-only JSON (bundled)
+    ├── rapidjson/                  # Header-only JSON (bundled)
+    └── build_deps.sh              # Vendored OpenSSL + curl builder
 ```
+
+---
 
 ## Building
 
@@ -374,30 +444,65 @@ cmake -B build -G "Visual Studio 17 2022"
 cmake --build build --config Release
 ```
 
-### Linux / macOS
+### Linux (vendored static — recommended for deployment)
 
 ```bash
-cmake -B build -DMCP_USE_CURL=ON
-cmake --build build
+# One-time: build vendored OpenSSL 3.3 + curl 8.11 from source
+third_party/build_deps.sh all
+
+# Build (auto-detects vendored libs, enables curl)
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+
+# Verify: no shared openssl/curl/crypto dependencies
+ldd build/api_gateway | grep -E 'libssl|libcurl|libcrypto'  # should be empty
 ```
 
-If libcurl isn't system-wide, point to it:
+### Linux (system libraries)
 
 ```bash
-cmake -B build -DMCP_USE_CURL=ON \
-      -DCURL_INCLUDE_DIR=/path/to/curl/include \
-      -DCURL_LIBRARY=/path/to/libcurl.a
+# Install deps (Ubuntu/Debian)
+sudo apt install libcurl4-openssl-dev libssl-dev
+
+cmake -B build -DMCP_USE_CURL=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
 ```
 
-### Build Artifacts
+### Container (Oracle Linux 8)
 
-| Binary | Size | DLL Dependencies |
-|--------|------|-----------------|
-| `api_gateway.exe` | platform/build dependent | `KERNEL32.dll` only on fully static Windows builds |
-| `example_server.exe` | 420 KB | `KERNEL32.dll` only |
-| `example_calculator.exe` | 462 KB | `KERNEL32.dll` only |
+```bash
+podman build -t cpp-mcp-oel8 -f Containerfile.oel8 .
+```
 
-Fully static — runs on any x64 Windows machine, no runtime install needed.
+Builds vendored OpenSSL + curl from source, compiles with GCC 13 + `-Werror`, runs tests, and verifies fully static linkage.
+
+### CMake Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `MCP_BUILD_EXAMPLES` | `ON` | Build example programs |
+| `MCP_BUILD_GATEWAY` | `ON` | Build the API gateway executable |
+| `MCP_BUILD_TESTS` | `ON` | Build the test suite |
+| `MCP_BUILD_BENCHMARKS` | `ON` | Build benchmark executables |
+| `MCP_USE_CURL` | `OFF` | Enable libcurl HTTP backend (Linux/macOS) |
+| `MCP_WARNINGS_AS_ERRORS` | `OFF` | Treat compiler warnings as errors |
+| `MCP_ENABLE_SANITIZERS` | `OFF` | Enable ASan + UBSan (Clang/GCC) |
+
+### Tests
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+---
+
+## HTTP Backend
+
+| Platform | Backend | Dependencies |
+|----------|---------|-------------|
+| Windows  | WinHTTP | None (system DLL) |
+| Linux    | libcurl | Vendored static or system (`-DMCP_USE_CURL=ON`) |
+| macOS    | libcurl | Vendored static or system (`-DMCP_USE_CURL=ON`) |
 
 ---
 
@@ -405,7 +510,7 @@ Fully static — runs on any x64 Windows machine, no runtime install needed.
 
 ### Claude Desktop
 
-Add to `%APPDATA%\Claude\claude_desktop_config.json`:
+Add to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
 
 ```json
 {
@@ -466,23 +571,11 @@ Add to `~/.codeium/windsurf/mcp_config.json` (same format as Cursor).
 
 ---
 
-## HTTP Backend
-
-| Platform | Backend | Dependencies |
-|----------|---------|-------------|
-| Windows  | WinHTTP | None (system lib) |
-| Linux    | libcurl | User-provided (`-DMCP_USE_CURL=ON`) |
-| macOS    | libcurl | User-provided (`-DMCP_USE_CURL=ON`) |
-
-The curl extension is **opt-in** — set `MCP_USE_CURL=ON` at build time and link your own libcurl. The framework does not bundle or download curl.
-
----
-
 ## Adding a New API
 
 1. Create a JSON file (e.g. `configs/slack.json`)
 2. Define `server`, `defaults` (base URL, auth), and `tools` (endpoints + params)
-3. Run: `api_gateway.exe configs/slack.json`
+3. Run: `./api_gateway configs/slack.json`
 
 No C++ code. No recompilation. Same binary.
 
@@ -512,6 +605,20 @@ Example — Slack in 15 lines:
 
 ---
 
+## CI
+
+GitHub Actions runs on every push and PR to `main`:
+
+| Job | Platform | Compiler | glibc | What |
+|-----|----------|----------|-------|------|
+| **Windows** | windows-latest | MSVC | N/A | Debug + Release, tests |
+| **Linux (OEL8)** | Oracle Linux 8 container | GCC 13 | **2.28** | Release, vendored static, `-Werror`, tests, linkage verification, binary artifacts |
+| **Sanitizers** | ubuntu-latest | Clang 17 | ~2.39 | Debug, ASan + UBSan |
+
+Linux binaries are built against **glibc 2.28** (the lowest supported enterprise glibc) and uploaded as CI artifacts — portable to RHEL 8+, OEL 8+, Amazon Linux 2, and any distro with glibc >= 2.28.
+
+---
+
 ## License
 
-GPLv3
+**LGPL-3.0** — you can link cpp-mcp into commercial/proprietary products without open-sourcing your application. If you modify cpp-mcp itself, those modifications must be released under LGPL-3.0.

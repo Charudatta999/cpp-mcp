@@ -9,6 +9,14 @@
 
 namespace mcp {
 
+// [FIX #4] Guard for uninitialized client -- called at top of every
+// public method that requires a completed initialize() handshake.
+static void require_initialized(bool initialized) {
+    if (!initialized) {
+        throw McpError("McpClient is not initialized. Call initialize() first.");
+    }
+}
+
 McpClient::McpClient(std::unique_ptr<HttpClientTransport> transport,
                      Implementation info)
     : transport_(std::move(transport)), info_(std::move(info)) {}
@@ -64,6 +72,8 @@ void McpClient::initialize() {
 // ── Discovery ────────────────────────────────────────────────────────────────
 
 std::vector<ToolDefinition> McpClient::list_tools() {
+    require_initialized(initialized_);
+
     auto result_json = send_request("tools/list");
     auto doc = json::parse(result_json);
 
@@ -98,6 +108,8 @@ std::vector<ToolDefinition> McpClient::list_tools() {
 }
 
 std::vector<ResourceDefinition> McpClient::list_resources() {
+    require_initialized(initialized_);
+
     auto result_json = send_request("resources/list");
     auto doc = json::parse(result_json);
 
@@ -119,6 +131,8 @@ std::vector<ResourceDefinition> McpClient::list_resources() {
 }
 
 std::vector<PromptDefinition> McpClient::list_prompts() {
+    require_initialized(initialized_);
+
     auto result_json = send_request("prompts/list");
     auto doc = json::parse(result_json);
 
@@ -152,6 +166,8 @@ std::vector<PromptDefinition> McpClient::list_prompts() {
 
 ToolResult McpClient::call_tool(const std::string& name,
                                  const ParamMap& args) {
+    require_initialized(initialized_);
+
     rapidjson::Document doc(rapidjson::kObjectType);
     auto& a = doc.GetAllocator();
 
@@ -195,6 +211,8 @@ ToolResult McpClient::call_tool(const std::string& name,
 }
 
 ResourceContent McpClient::read_resource(const std::string& uri) {
+    require_initialized(initialized_);
+
     rapidjson::Document doc(rapidjson::kObjectType);
     auto& a = doc.GetAllocator();
     doc.AddMember("uri", rapidjson::Value(uri.c_str(), a), a);
@@ -219,6 +237,8 @@ ResourceContent McpClient::read_resource(const std::string& uri) {
 
 GetPromptResult McpClient::get_prompt(const std::string& name,
                                        const ParamMap& args) {
+    require_initialized(initialized_);
+
     rapidjson::Document doc(rapidjson::kObjectType);
     auto& a = doc.GetAllocator();
     doc.AddMember("name", rapidjson::Value(name.c_str(), a), a);
@@ -265,6 +285,7 @@ GetPromptResult McpClient::get_prompt(const std::string& name,
 }
 
 void McpClient::ping() {
+    require_initialized(initialized_);
     send_request("ping");
 }
 

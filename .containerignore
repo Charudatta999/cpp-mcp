@@ -1,0 +1,12 @@
+build/
+build-*/
+.cache/
+.vs/
+.vscode/
+*.exe
+*.obj
+*.lib
+*.dll
+auth-test-bin/
+build-test-bin/
+third_party/_build/
